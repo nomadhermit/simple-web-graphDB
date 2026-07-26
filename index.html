@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simple GraphDB</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">GraphDB</div>
+    <div class="toolbar-group">
+      <label>Graph:</label>
+      <select id="graphSelect"></select>
+      <button id="btnNew" title="Create new graph">New</button>
+      <button id="btnSave" title="Save current graph">Save</button>
+      <button id="btnExportPng" title="Export graph view as PNG">Export PNG</button>
+      <button id="btnDownloadJson" title="Download graph as JSON file">Download JSON</button>
+      <button id="btnUploadJson" title="Upload graph from JSON file">Upload JSON</button>
+      <input type="file" id="jsonFileInput" accept="application/json,.json" style="display:none" />
+      <button id="btnDeleteGraph" class="danger" title="Delete selected graph">Delete</button>
+    </div>
+    <div class="toolbar-group">
+      <button id="btnAddNode" title="Add a new node">+ Node</button>
+      <button id="btnAddEdge" title="Select a node, click this, then click the target node">+ Rel</button>
+      <button id="btnGroup" title="Group selected nodes (Shift+click to multi-select)">Group</button>
+      <button id="btnDeleteSelected" class="danger" title="Delete selected node, edge, or group">Delete</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="hint">Wheel zoom · Drag background to pan · Shift+click multi-select · Drag selection to move · Group · + Rel</div>
+  </header>
+
+  <main class="workspace">
+    <section class="pane left" id="graphPane">
+      <svg id="graphSvg" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          </marker>
+          <marker id="arrowhead-selected" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+          </marker>
+        </defs>
+        <g id="viewport">
+          <g id="groupsLayer"></g>
+          <g id="edgesLayer"></g>
+          <g id="nodesLayer"></g>
+        </g>
+      </svg>
+      <div class="zoom-controls" id="zoomControls">
+        <button type="button" id="btnZoomIn" title="Zoom in">+</button>
+        <button type="button" id="btnZoomOut" title="Zoom out">−</button>
+        <button type="button" id="btnZoomReset" title="Reset zoom">100%</button>
+        <span id="zoomLabel">100%</span>
+      </div>
+      <div id="emptyState" class="empty-state">
+        <p>No graph loaded</p>
+        <p>Create a new graph or select an existing one</p>
+      </div>
+    </section>
+
+    <div class="resizer" id="paneResizer" title="Drag to resize"></div>
+
+    <aside class="pane right" id="propsPane">
+      <div id="propsContent">
+        <div class="props-empty">Select a node or relationship</div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Modal for new graph -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-content">
+      <h3 id="modalTitle">New Graph</h3>
+      <input type="text" id="modalInput" placeholder="Graph name" />
+      <div class="modal-actions">
+        <button id="modalCancel">Cancel</button>
+        <button id="modalConfirm" class="primary">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

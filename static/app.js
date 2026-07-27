@@ -3,7 +3,8 @@
   let currentGraph = null; // { name, nodes: {}, edges: {}, groups: {} }
   let selectedId = null;   // node / edge / group id
   let selectedType = null; // 'node' | 'edge' | 'group'
-  let selectedNodeIds = new Set(); // multi-select for grouping
+  let selectedNodeIds = new Set(); // multi-select nodes for grouping
+  let selectedGroupIds = new Set(); // multi-select groups for parent grouping
   let dragState = null;    // { id, startX, startY, origX, origY }
   let linkFromId = null;   // when set, next node click creates a relationship from this id
 
@@ -111,6 +112,7 @@
     selectedId = null;
     selectedType = null;
     selectedNodeIds = new Set();
+    selectedGroupIds = new Set();
   }
 
   async function loadGraph(name) {
@@ -182,6 +184,53 @@
     try {
       localStorage.setItem('graphdb-view', JSON.stringify({ x: viewX, y: viewY, s: viewScale }));
     } catch (_) {}
+  }
+
+  /** Center graph pane on a node, group, or edge (midpoint of endpoints). */
+  function centerOnObject(type, id) {
+    if (!currentGraph || !graphSvg) return;
+    let wx = null, wy = null;
+
+    if (type === 'node') {
+      const node = currentGraph.nodes[id];
+      if (!node) return;
+      const c = nodeCenter(node);
+      wx = c.x;
+      wy = c.y;
+    } else if (type === 'group') {
+      const grp = currentGraph.groups[id];
+      if (!grp) return;
+      const b = groupBounds(grp);
+      if (!b) return;
+      wx = b.x + b.w / 2;
+      wy = b.y + b.h / 2;
+    } else if (type === 'edge') {
+      const edge = currentGraph.edges[id];
+      if (!edge) return;
+      const fc = endpointCenter(edge.from);
+      const tc = endpointCenter(edge.to);
+      if (fc && tc) {
+        wx = (fc.x + tc.x) / 2;
+        wy = (fc.y + tc.y) / 2;
+      } else if (fc) {
+        wx = fc.x;
+        wy = fc.y;
+      } else if (tc) {
+        wx = tc.x;
+        wy = tc.y;
+      } else {
+        return;
+      }
+    } else {
+      return;
+    }
+
+    const rect = graphSvg.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    viewX = cx - wx * viewScale;
+    viewY = cy - wy * viewScale;
+    applyViewport();
   }
 
   function setZoom(newScale, centerClientX, centerClientY) {
@@ -338,6 +387,7 @@
       selectedType = 'group';
       selectedId = grp.id;
       selectedNodeIds = new Set();
+      selectedGroupIds = new Set();
       render();
     } catch (e) {
       alert('Failed to create group: ' + e.message);
@@ -371,6 +421,33 @@
     }
   }
 
+  /** True if every member of `a` is also in `b`, and a has at least one member. */
+  function groupIsSubsetOf(a, b) {
+    if (!a || !b || a.id === b.id) return false;
+    const idsA = a.nodeIds || [];
+    const idsB = new Set(b.nodeIds || []);
+    if (!idsA.length || !idsB.size) return false;
+    return idsA.every(id => idsB.has(id));
+  }
+
+  /** Nesting role: parent (contains a child group), child (fully inside another), both, or null. */
+  function groupNestingInfo(grp) {
+    if (!currentGraph || !grp) return { isParent: false, isChild: false, depth: 0 };
+    let isParent = false;
+    let isChild = false;
+    let depth = 0;
+    for (const other of Object.values(currentGraph.groups || {})) {
+      if (other.id === grp.id) continue;
+      if (groupIsSubsetOf(other, grp)) isParent = true;
+      if (groupIsSubsetOf(grp, other)) {
+        isChild = true;
+        // depth = how many groups properly contain this one
+        depth++;
+      }
+    }
+    return { isParent, isChild, depth };
+  }
+
   function groupBounds(grp) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     let count = 0;
@@ -385,13 +462,16 @@
       maxY = Math.max(maxY, node.position.y + h);
     }
     if (count === 0) return null;
+    const nest = groupNestingInfo(grp);
+    // Parent groups get extra padding so the box is larger than nested children
+    const pad = nest.isParent ? GROUP_PAD + 16 : GROUP_PAD;
     const attrCount = groupVisibleAttrLines(grp).length;
-    const topExtra = 18 + (attrCount > 0 ? attrCount * 12 + 4 : 0);
+    const topExtra = 18 + (attrCount > 0 ? attrCount * 12 + 4 : 0) + (nest.isParent ? 6 : 0);
     return {
-      x: minX - GROUP_PAD,
-      y: minY - GROUP_PAD - topExtra,
-      w: (maxX - minX) + GROUP_PAD * 2,
-      h: (maxY - minY) + GROUP_PAD * 2 + topExtra
+      x: minX - pad,
+      y: minY - pad - topExtra,
+      w: (maxX - minX) + pad * 2,
+      h: (maxY - minY) + pad * 2 + topExtra
     };
   }
 
@@ -516,8 +596,14 @@
     }
     emptyState.classList.add('hidden');
 
-    // groups behind everything
-    for (const grp of Object.values(currentGraph.groups || {})) {
+    // groups behind everything — draw outer (parent) groups first so children sit on top
+    const groupsSorted = Object.values(currentGraph.groups || {}).slice().sort((a, b) => {
+      const da = groupNestingInfo(a).depth;
+      const db = groupNestingInfo(b).depth;
+      // lower depth (outer parents) first
+      return da - db;
+    });
+    for (const grp of groupsSorted) {
       drawGroup(grp);
     }
 
@@ -536,26 +622,35 @@
     const b = groupBounds(grp);
     if (!b) return;
 
+    const nest = groupNestingInfo(grp);
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.classList.add('group-shape');
+    if (nest.isParent) g.classList.add('group-parent');
+    if (nest.isChild) g.classList.add('group-child');
     g.dataset.id = grp.id;
 
     const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     rect.classList.add('group-box');
-    if (selectedType === 'group' && selectedId === grp.id) rect.classList.add('selected');
+    if (nest.isParent) rect.classList.add('group-box-parent');
+    if (nest.isChild) rect.classList.add('group-box-child');
+    if ((selectedType === 'group' && selectedId === grp.id) || selectedGroupIds.has(grp.id)) rect.classList.add('selected');
     if (linkFromId === grp.id) rect.classList.add('link-source');
     rect.setAttribute('x', b.x);
     rect.setAttribute('y', b.y);
     rect.setAttribute('width', b.w);
     rect.setAttribute('height', b.h);
+    // Explicit colors for nesting (unless custom group color is set)
     if (grp.color) {
-      rect.style.stroke = grp.color;
-      rect.style.fill = grp.color.replace(')', ', 0.1)').replace('rgb', 'rgba').replace('#', '');
-      // simple opacity fill via attribute if hex
       if (grp.color.startsWith('#')) {
         rect.setAttribute('fill', grp.color + '18');
         rect.setAttribute('stroke', grp.color);
       }
+    } else if (nest.isParent && !nest.isChild) {
+      rect.setAttribute('fill', 'rgba(245, 158, 11, 0.10)');
+      rect.setAttribute('stroke', '#f59e0b');
+    } else if (nest.isChild) {
+      rect.setAttribute('fill', 'rgba(16, 185, 129, 0.12)');
+      rect.setAttribute('stroke', '#10b981');
     }
     g.appendChild(rect);
 
@@ -595,6 +690,7 @@
       ay += 12;
     }
 
+    g.addEventListener('mousedown', onGroupMouseDown);
     g.addEventListener('click', (e) => {
       e.stopPropagation();
       if (linkFromId) {
@@ -611,6 +707,24 @@
           return;
         }
         addEdge(fromId, grp.id, label.trim() || 'relates');
+        return;
+      }
+      if (e.shiftKey || e.metaKey || e.ctrlKey) {
+        // multi-select groups (and keep any selected nodes)
+        if (selectedGroupIds.has(grp.id)) {
+          selectedGroupIds.delete(grp.id);
+          if (selectedId === grp.id) {
+            selectedId = selectedGroupIds.size ? [...selectedGroupIds][0]
+              : (selectedNodeIds.size ? [...selectedNodeIds][0] : null);
+            selectedType = selectedGroupIds.size ? 'group'
+              : (selectedNodeIds.size ? 'node' : null);
+          }
+        } else {
+          selectedGroupIds.add(grp.id);
+          selectedId = grp.id;
+          selectedType = 'group';
+        }
+        render();
         return;
       }
       select('group', grp.id);
@@ -702,16 +816,14 @@
         return;
       }
       if (e.shiftKey || e.metaKey || e.ctrlKey) {
-        // multi-select toggle
-        if (selectedType !== 'node') {
-          selectedNodeIds = new Set();
-          selectedType = 'node';
-        }
+        // multi-select toggle (keep selected groups)
         if (selectedNodeIds.has(node.id)) {
           selectedNodeIds.delete(node.id);
           if (selectedId === node.id) {
-            selectedId = selectedNodeIds.size ? [...selectedNodeIds][0] : null;
-            if (!selectedId) selectedType = null;
+            selectedId = selectedNodeIds.size ? [...selectedNodeIds][0]
+              : (selectedGroupIds.size ? [...selectedGroupIds][0] : null);
+            selectedType = selectedNodeIds.size ? 'node'
+              : (selectedGroupIds.size ? 'group' : null);
           }
         } else {
           selectedNodeIds.add(node.id);
@@ -1050,26 +1162,62 @@
     selectedId = id;
     if (type === 'node') {
       selectedNodeIds = new Set([id]);
+      selectedGroupIds = new Set();
+    } else if (type === 'group') {
+      selectedGroupIds = new Set([id]);
+      selectedNodeIds = new Set();
     } else {
       selectedNodeIds = new Set();
+      selectedGroupIds = new Set();
     }
     render();
   }
 
+  /** Union of selected node ids and all members of selected groups. */
+  function collectSelectionNodeIds() {
+    const ids = new Set(selectedNodeIds);
+    for (const gid of selectedGroupIds) {
+      const grp = currentGraph && currentGraph.groups[gid];
+      if (!grp) continue;
+      for (const nid of grp.nodeIds || []) ids.add(nid);
+    }
+    // also single selection fallbacks
+    if (!ids.size && selectedType === 'node' && selectedId) ids.add(selectedId);
+    if (!ids.size && selectedType === 'group' && selectedId) {
+      const grp = currentGraph && currentGraph.groups[selectedId];
+      for (const nid of (grp && grp.nodeIds) || []) ids.add(nid);
+    }
+    return [...ids];
+  }
+
+  function selectionSummary() {
+    const n = selectedNodeIds.size;
+    const g = selectedGroupIds.size;
+    const parts = [];
+    if (n) parts.push(n + ' node' + (n === 1 ? '' : 's'));
+    if (g) parts.push(g + ' group' + (g === 1 ? '' : 's'));
+    return parts.join(', ') || 'nothing';
+  }
+
   function renderProps() {
-    if (currentGraph && selectedType === 'node' && selectedNodeIds.size > 1) {
+    if (currentGraph && (selectedNodeIds.size + selectedGroupIds.size) > 1) {
+      const ids = collectSelectionNodeIds();
       propsContent.innerHTML = `
         <div class="props-section">
           <h3>Multi-select</h3>
-          <p style="color:var(--muted);font-size:0.85rem;margin-bottom:12px">${selectedNodeIds.size} nodes selected</p>
+          <p style="color:var(--muted);font-size:0.85rem;margin-bottom:12px">${escapeHtml(selectionSummary())} selected → ${ids.length} node(s) in union</p>
           <div class="props-actions">
-            <button class="primary" id="btnGroupFromProps">Create Group</button>
+            <button class="primary" id="btnGroupFromProps">Create Parent Group</button>
           </div>
         </div>`;
       document.getElementById('btnGroupFromProps').addEventListener('click', () => {
-        const label = prompt('Group name:', 'Group');
+        if (ids.length < 1) {
+          alert('Selection has no nodes to group');
+          return;
+        }
+        const label = prompt('Parent group name:', 'Parent Group');
         if (label === null) return;
-        addGroup([...selectedNodeIds], label.trim() || 'Group');
+        addGroup(ids, label.trim() || 'Parent Group');
       });
       return;
     }
@@ -1628,39 +1776,24 @@
         });
       });
 
-      // Relationships involving this group or its member nodes
-      const memberSet = new Set(grp.nodeIds || []);
+      // Relationships where this group is an endpoint only (exclude member-node edges)
       const groupRelList = document.getElementById('groupRelList');
       let relCount = 0;
       for (const edge of Object.values(currentGraph.edges || {})) {
         const fromIsGroup = edge.from === grp.id;
         const toIsGroup = edge.to === grp.id;
-        const fromIsMember = memberSet.has(edge.from);
-        const toIsMember = memberSet.has(edge.to);
-        if (!fromIsGroup && !toIsGroup && !fromIsMember && !toIsMember) continue;
+        if (!fromIsGroup && !toIsGroup) continue;
 
-        let scope;
-        if (fromIsGroup || toIsGroup) scope = 'group';
-        else scope = 'member';
-
-        const outbound = fromIsGroup || fromIsMember;
+        const outbound = fromIsGroup;
         const dir = outbound ? '→' : '←';
         const otherId = outbound ? edge.to : edge.from;
-        // For member edges, show which member; never show the group label
-        let memberHint = '';
-        if (scope === 'member') {
-          const memberId = fromIsMember ? edge.from : edge.to;
-          memberHint = `<span style="color:var(--muted)">${escapeHtml(endpointLabel(memberId))}</span>`;
-        }
 
         const item = document.createElement('div');
         item.className = 'rel-item';
         item.innerHTML = `
           <div class="rel-line">
-            <span class="inherited-badge">${scope}</span>
             <span class="rel-dir">${dir}</span>
             <strong>${escapeHtml(edge.label)}</strong>
-            ${memberHint}
             <span style="color:var(--muted)">to</span>
             <span>${escapeHtml(endpointLabel(otherId))}</span>
             <button class="btn-icon" data-edge="${edge.id}" style="margin-left:auto" title="Delete relationship">×</button>
@@ -1693,6 +1826,63 @@
   }
 
   // --- Dragging ---
+  function beginNodeDrag(primaryId, moveIds, e) {
+    const origins = {};
+    for (const mid of moveIds) {
+      const n = currentGraph.nodes[mid];
+      if (!n) continue;
+      origins[mid] = { x: n.position.x, y: n.position.y };
+    }
+    if (!Object.keys(origins).length) return;
+
+    dragState = {
+      id: primaryId,
+      ids: Object.keys(origins),
+      origins,
+      startX: e.clientX,
+      startY: e.clientY
+    };
+    for (const mid of dragState.ids) {
+      const el = nodesLayer.querySelector(`[data-id="${mid}"]`);
+      if (el) el.classList.add('dragging');
+    }
+    document.addEventListener('mousemove', onDragMove);
+    document.addEventListener('mouseup', onDragEnd);
+  }
+
+  function onGroupMouseDown(e) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    if (linkFromId) return;
+    if (e.shiftKey || e.metaKey || e.ctrlKey) return; // multi-select only
+
+    const g = e.currentTarget;
+    const gid = g.dataset.id;
+    const grp = currentGraph.groups[gid];
+    if (!grp) return;
+
+    // Keep multi-select if this group is already part of it
+    if (!(selectedGroupIds.has(gid) && selectedGroupIds.size > 1)) {
+      select('group', gid);
+    }
+
+    // Move members of all selected groups (or just this one)
+    const groupIds = (selectedGroupIds.size > 1 && selectedGroupIds.has(gid))
+      ? [...selectedGroupIds]
+      : [gid];
+
+    const moveIds = new Set();
+    for (const id of groupIds) {
+      const gg = currentGraph.groups[id];
+      if (!gg) continue;
+      for (const nid of gg.nodeIds || []) moveIds.add(nid);
+    }
+    // Also include any multi-selected nodes
+    for (const nid of selectedNodeIds) moveIds.add(nid);
+
+    beginNodeDrag(gid, [...moveIds], e);
+  }
+
   function onNodeMouseDown(e) {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -1716,26 +1906,7 @@
       ? [...selectedNodeIds]
       : [id];
 
-    const origins = {};
-    for (const mid of moveIds) {
-      const n = currentGraph.nodes[mid];
-      if (!n) continue;
-      origins[mid] = { x: n.position.x, y: n.position.y };
-    }
-
-    dragState = {
-      id,
-      ids: moveIds,
-      origins,
-      startX: e.clientX,
-      startY: e.clientY
-    };
-    for (const mid of moveIds) {
-      const el = nodesLayer.querySelector(`[data-id="${mid}"]`);
-      if (el) el.classList.add('dragging');
-    }
-    document.addEventListener('mousemove', onDragMove);
-    document.addEventListener('mouseup', onDragEnd);
+    beginNodeDrag(id, moveIds, e);
   }
 
   function snapCoord(v) {
@@ -2325,16 +2496,15 @@
       alert('Select a graph first');
       return;
     }
-    const ids = selectedNodeIds.size
-      ? [...selectedNodeIds]
-      : (selectedType === 'node' && selectedId ? [selectedId] : []);
+    const ids = collectSelectionNodeIds();
     if (ids.length < 1) {
-      alert('Select one or more nodes first (Shift+click to multi-select), then click Group.');
+      alert('Select nodes and/or groups (Shift+click to multi-select), then click Group.\n\nSelected groups contribute their member nodes to the new parent group.');
       return;
     }
-    const label = prompt('Group name:', 'Group');
+    const hasGroups = selectedGroupIds.size > 0;
+    const label = prompt(hasGroups ? 'Parent group name:' : 'Group name:', hasGroups ? 'Parent Group' : 'Group');
     if (label === null) return;
-    addGroup(ids, label.trim() || 'Group');
+    addGroup(ids, label.trim() || (hasGroups ? 'Parent Group' : 'Group'));
   });
 
   // Escape cancels link mode
@@ -2576,6 +2746,12 @@
       });
     }
     modal.classList.remove('hidden');
+    try {
+      const showId = localStorage.getItem('graphdb-report-show-id') === '1';
+      const cb = document.getElementById('reportShowId');
+      if (cb) cb.checked = showId;
+    } catch (_) {}
+    applyReportIdColumnVisibility();
     // Show everything by default when opening
     runReportQuery();
   }
@@ -2640,6 +2816,7 @@
           label: n.label || '',
           attributes: { ...(n.attributes || {}) },
           note: n.note || '',
+          members: [],
           extra: ''
         });
       }
@@ -2654,6 +2831,7 @@
           label: e.label || '',
           attributes: { ...(e.attributes || {}) },
           note: e.note || '',
+          members: [],
           extra: endpointLabel(e.from) + ' → ' + endpointLabel(e.to)
         });
       }
@@ -2662,13 +2840,19 @@
       for (const g of Object.values(currentGraph.groups || {})) {
         if (!labelMatch(g.label, labelF)) continue;
         if (!attrMatch(g.attributes, attrKey, attrVal, attrMode)) continue;
+        const memberLabels = [];
+        for (const nid of g.nodeIds || []) {
+          const n = currentGraph.nodes[nid];
+          memberLabels.push(n ? (n.label || nid) : nid);
+        }
         rows.push({
           type: 'group',
           id: g.id,
           label: g.label || '',
           attributes: { ...(g.attributes || {}) },
           note: g.note || '',
-          extra: ((g.nodeIds || []).length) + ' members'
+          members: memberLabels,
+          extra: ''
         });
       }
     }
@@ -2679,28 +2863,60 @@
     renderReportTable(rows);
   }
 
+  function reportShowIdEnabled() {
+    const cb = document.getElementById('reportShowId');
+    return !!(cb && cb.checked);
+  }
+
+  function applyReportIdColumnVisibility() {
+    const show = reportShowIdEnabled();
+    const table = document.getElementById('reportTable');
+    if (table) table.classList.toggle('hide-id', !show);
+  }
+
+  function applyReportMembersColumnVisibility(rows) {
+    const table = document.getElementById('reportTable');
+    if (!table) return;
+    const typeSel = (document.getElementById('reportType') || {}).value || 'all';
+    const hasGroups = typeSel === 'group' || (rows || []).some(r => r.type === 'group');
+    table.classList.toggle('show-members', hasGroups);
+  }
+
   function renderReportTable(rows) {
     const body = document.getElementById('reportBody');
     const count = document.getElementById('reportCount');
     if (count) count.textContent = rows.length + ' result' + (rows.length === 1 ? '' : 's');
+    applyReportIdColumnVisibility();
+    applyReportMembersColumnVisibility(rows);
     if (!body) return;
+    const typeSel = (document.getElementById('reportType') || {}).value || 'all';
+    const showMembers = typeSel === 'group' || rows.some(r => r.type === 'group');
+    let colSpan = 5; // type, goto, label, attrs, note
+    if (reportShowIdEnabled()) colSpan++;
+    if (showMembers) colSpan++;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="6" class="report-empty">No matches</td></tr>';
+      body.innerHTML = '<tr><td colspan="' + colSpan + '" class="report-empty">No matches</td></tr>';
       return;
     }
     body.innerHTML = '';
     for (const row of rows) {
+      const membersText = (row.members && row.members.length)
+        ? row.members.join(', ')
+        : (row.type === 'group' ? '—' : '');
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><span class="report-type-badge ${row.type}">${row.type}</span></td>
+        <td class="report-goto-cell">
+          <button type="button" class="btn-icon report-goto" data-type="${row.type}" data-id="${escapeAttr(row.id)}" title="Select in graph">↗</button>
+        </td>
         <td>
           <strong>${escapeHtml(row.label)}</strong>
           ${row.extra ? '<div style="color:var(--muted);font-size:0.75rem;margin-top:2px">' + escapeHtml(row.extra) + '</div>' : ''}
         </td>
-        <td style="color:var(--muted);font-size:0.75rem;max-width:100px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(row.id)}</td>
+        <td class="report-col-id" style="color:var(--muted);font-size:0.75rem;max-width:100px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(row.id)}</td>
+        <td class="report-col-members" style="max-width:220px;white-space:pre-wrap;word-break:break-word">${escapeHtml(membersText)}</td>
         <td class="report-attrs">${escapeHtml(formatAttrs(row.attributes))}</td>
         <td style="max-width:160px;white-space:pre-wrap;word-break:break-word">${escapeHtml(row.note)}</td>
-        <td><button type="button" class="btn-icon report-goto" data-type="${row.type}" data-id="${escapeAttr(row.id)}" title="Select in graph">↗</button></td>
       `;
       body.appendChild(tr);
     }
@@ -2711,6 +2927,8 @@
         closeReportModal();
         select(typ, id);
         render();
+        // Center after render so layout/bounds are current
+        requestAnimationFrame(() => centerOnObject(typ, id));
       });
     });
   }
@@ -2725,12 +2943,13 @@
       if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
       return s;
     };
-    const lines = ['type,label,id,attributes,note,extra'];
+    const lines = ['type,label,id,members,attributes,note,extra'];
     for (const r of lastReportRows) {
       lines.push([
         esc(r.type),
         esc(r.label),
         esc(r.id),
+        esc((r.members || []).join('; ')),
         esc(formatAttrs(r.attributes).replace(/\n/g, '; ')),
         esc(r.note),
         esc(r.extra)
@@ -2799,6 +3018,15 @@
     // backdrop click
     if (t.id === 'reportModal') {
       closeReportModal();
+    }
+  });
+
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'reportShowId') {
+      try {
+        localStorage.setItem('graphdb-report-show-id', e.target.checked ? '1' : '0');
+      } catch (_) {}
+      applyReportIdColumnVisibility();
     }
   });
 

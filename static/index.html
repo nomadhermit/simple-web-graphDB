@@ -28,7 +28,7 @@
       <button id="btnDeleteSelected" class="danger" title="Delete selected node, edge, or group">Delete</button>
     </div>
     <div class="spacer"></div>
-    <div class="hint">Wheel zoom · Drag background to pan · Shift+click multi-select · Drag selection to move · Group · + Rel</div>
+    <div class="hint">Wheel zoom · Drag background to pan · Shift+click multi-select nodes/groups · Drag selection to move · Group · + Rel</div>
   </header>
 
   <main class="workspace">
@@ -125,6 +125,10 @@
           <button type="button" id="reportRun" class="primary">Run query</button>
           <button type="button" id="reportExportCsv">Export CSV</button>
           <button type="button" id="reportExportJson">Export JSON</button>
+          <label class="report-opt" title="Show object ID column">
+            <input type="checkbox" id="reportShowId" />
+            <span>Show ID</span>
+          </label>
           <span id="reportCount" class="report-count"></span>
         </div>
       </div>
@@ -133,11 +137,12 @@
           <thead>
             <tr>
               <th>Type</th>
+              <th title="Select in graph"></th>
               <th>Label</th>
-              <th>ID</th>
+              <th class="report-col-id">ID</th>
+              <th class="report-col-members">Members</th>
               <th>Attributes</th>
               <th>Note</th>
-              <th></th>
             </tr>
           </thead>
           <tbody id="reportBody">

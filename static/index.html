@@ -15,6 +15,7 @@
       <button id="btnNew" title="Create new graph">New</button>
       <button id="btnSave" title="Save current graph">Save</button>
       <button id="btnExportPng" title="Export graph view as PNG">Export PNG</button>
+      <button id="btnReport" title="Query and report on objects/attributes">Report</button>
       <button id="btnDownloadJson" title="Download graph as JSON file">Download JSON</button>
       <button id="btnUploadJson" title="Upload graph from JSON file">Upload JSON</button>
       <input type="file" id="jsonFileInput" accept="application/json,.json" style="display:none" />
@@ -42,8 +43,8 @@
           </marker>
         </defs>
         <g id="viewport">
-          <g id="groupsLayer"></g>
           <g id="edgesLayer"></g>
+          <g id="groupsLayer"></g>
           <g id="nodesLayer"></g>
         </g>
       </svg>
@@ -52,6 +53,11 @@
         <button type="button" id="btnZoomOut" title="Zoom out">−</button>
         <button type="button" id="btnZoomReset" title="Reset zoom">100%</button>
         <span id="zoomLabel">100%</span>
+        <label class="snap-toggle" title="Snap nodes to grid while moving">
+          <input type="checkbox" id="chkSnapGrid" />
+          <span>Snap</span>
+        </label>
+        <button type="button" id="btnSnapAll" title="Snap all nodes to grid now">Snap All</button>
       </div>
       <div id="emptyState" class="empty-state">
         <p>No graph loaded</p>
@@ -80,6 +86,72 @@
     </div>
   </div>
 
+  <!-- Report / query panel -->
+  <div id="reportModal" class="modal hidden">
+    <div class="modal-content report-modal" id="reportPanel">
+      <div class="report-header">
+        <h3>Report</h3>
+        <button type="button" id="reportClose" class="btn-icon" title="Close">×</button>
+      </div>
+      <div class="report-filters">
+        <div class="report-filter-row">
+          <label>Object type</label>
+          <select id="reportType">
+            <option value="all">All</option>
+            <option value="node">Nodes</option>
+            <option value="edge">Relationships</option>
+            <option value="group">Groups</option>
+          </select>
+        </div>
+        <div class="report-filter-row">
+          <label>Label contains</label>
+          <input type="text" id="reportLabel" placeholder="optional" />
+        </div>
+        <div class="report-filter-row">
+          <label>Attribute key</label>
+          <input type="text" id="reportAttrKey" placeholder="e.g. status" list="reportAttrKeyList" />
+          <datalist id="reportAttrKeyList"></datalist>
+        </div>
+        <div class="report-filter-row">
+          <label>Attribute value</label>
+          <input type="text" id="reportAttrVal" placeholder="optional" />
+          <select id="reportAttrMatch">
+            <option value="contains">contains</option>
+            <option value="equals">equals</option>
+            <option value="exists">key exists</option>
+          </select>
+        </div>
+        <div class="report-filter-row report-filter-actions">
+          <button type="button" id="reportRun" class="primary">Run query</button>
+          <button type="button" id="reportExportCsv">Export CSV</button>
+          <button type="button" id="reportExportJson">Export JSON</button>
+          <span id="reportCount" class="report-count"></span>
+        </div>
+      </div>
+      <div class="report-results-wrap">
+        <table class="report-table" id="reportTable">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Label</th>
+              <th>ID</th>
+              <th>Attributes</th>
+              <th>Note</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="reportBody">
+            <tr><td colspan="6" class="report-empty">Run a query to see results</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="report-resize-e" id="reportResizeE" title="Drag to resize width"></div>
+      <div class="report-resize-s" id="reportResizeS" title="Drag to resize height"></div>
+      <div class="report-resize-se" id="reportResizeSE" title="Drag to resize"></div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
+
 </body>
 </html>

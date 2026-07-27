@@ -12,6 +12,8 @@
   let viewX = 0;
   let viewY = 0;
   let panState = null; // { startClientX, startClientY, origX, origY }
+  let snapToGrid = false;
+  const GRID_SIZE = 20;
 
   const NODE_W = 160;
   const NODE_H_BASE = 36;
@@ -24,6 +26,7 @@
   const btnNew = document.getElementById('btnNew');
   const btnSave = document.getElementById('btnSave');
   const btnExportPng = document.getElementById('btnExportPng');
+  const btnReport = document.getElementById('btnReport');
   const btnDownloadJson = document.getElementById('btnDownloadJson');
   const btnUploadJson = document.getElementById('btnUploadJson');
   const jsonFileInput = document.getElementById('jsonFileInput');
@@ -41,6 +44,8 @@
   const btnZoomOut = document.getElementById('btnZoomOut');
   const btnZoomReset = document.getElementById('btnZoomReset');
   const zoomLabel = document.getElementById('zoomLabel');
+  const chkSnapGrid = document.getElementById('chkSnapGrid');
+  const btnSnapAll = document.getElementById('btnSnapAll');
   const emptyState = document.getElementById('emptyState');
   const propsContent = document.getElementById('propsContent');
   const propsPane = document.getElementById('propsPane');
@@ -675,15 +680,6 @@
       g.appendChild(t);
       y += ATTR_H;
     }
-
-    // id hint
-    const idText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    idText.classList.add('node-id');
-    idText.setAttribute('x', NODE_W - 6);
-    idText.setAttribute('y', h - 4);
-    idText.setAttribute('text-anchor', 'end');
-    idText.textContent = node.id.slice(-6);
-    g.appendChild(idText);
 
     // events
     g.addEventListener('mousedown', onNodeMouseDown);
@@ -1742,17 +1738,31 @@
     document.addEventListener('mouseup', onDragEnd);
   }
 
+  function snapCoord(v) {
+    return Math.round(v / GRID_SIZE) * GRID_SIZE;
+  }
+
+  function snapPosition(pos) {
+    return { x: snapCoord(pos.x), y: snapCoord(pos.y) };
+  }
+
   function onDragMove(e) {
     if (!dragState) return;
     // convert screen delta to world delta
-    const dx = (e.clientX - dragState.startX) / viewScale;
-    const dy = (e.clientY - dragState.startY) / viewScale;
+    let dx = (e.clientX - dragState.startX) / viewScale;
+    let dy = (e.clientY - dragState.startY) / viewScale;
     for (const mid of dragState.ids) {
       const node = currentGraph.nodes[mid];
       const orig = dragState.origins[mid];
       if (!node || !orig) continue;
-      node.position.x = orig.x + dx;
-      node.position.y = orig.y + dy;
+      let x = orig.x + dx;
+      let y = orig.y + dy;
+      if (snapToGrid) {
+        x = snapCoord(x);
+        y = snapCoord(y);
+      }
+      node.position.x = x;
+      node.position.y = y;
       const el = nodesLayer.querySelector(`[data-id="${mid}"]`);
       if (el) el.setAttribute('transform', `translate(${node.position.x}, ${node.position.y})`);
     }
@@ -1774,6 +1784,17 @@
     for (const mid of ids) {
       const el = nodesLayer.querySelector(`[data-id="${mid}"]`);
       if (el) el.classList.remove('dragging');
+    }
+    if (snapToGrid) {
+      for (const mid of ids) {
+        const node = currentGraph.nodes[mid];
+        if (!node) continue;
+        node.position = snapPosition(node.position);
+        const el = nodesLayer.querySelector(`[data-id="${mid}"]`);
+        if (el) el.setAttribute('transform', `translate(${node.position.x}, ${node.position.y})`);
+      }
+      redrawEdgesForNode(ids[0]);
+      redrawGroups();
     }
     const toSave = ids.map(mid => currentGraph.nodes[mid]).filter(Boolean);
     dragState = null;
@@ -2405,6 +2426,47 @@
 
   if (btnZoomIn) btnZoomIn.addEventListener('click', () => setZoom(viewScale * 1.2));
   if (btnZoomOut) btnZoomOut.addEventListener('click', () => setZoom(viewScale / 1.2));
+
+  try {
+    snapToGrid = localStorage.getItem('graphdb-snap') === '1';
+  } catch (_) {}
+  if (chkSnapGrid) {
+    chkSnapGrid.checked = snapToGrid;
+    chkSnapGrid.addEventListener('change', () => {
+      snapToGrid = chkSnapGrid.checked;
+      try { localStorage.setItem('graphdb-snap', snapToGrid ? '1' : '0'); } catch (_) {}
+      const pane = document.getElementById('graphPane');
+      if (pane) pane.classList.toggle('snap-grid', snapToGrid);
+    });
+    const pane = document.getElementById('graphPane');
+    if (snapToGrid && pane) pane.classList.add('snap-grid');
+  }
+  if (btnSnapAll) {
+    btnSnapAll.addEventListener('click', async () => {
+      if (!currentGraph) return;
+      const nodes = Object.values(currentGraph.nodes || {});
+      if (!nodes.length) return;
+      btnSnapAll.disabled = true;
+      try {
+        for (const node of nodes) {
+          node.position = snapPosition(node.position);
+        }
+        render();
+        for (const node of nodes) {
+          await updateNode(node.id, {
+            label: node.label,
+            note: node.note || '',
+            attributes: node.attributes,
+            visibleAttributes: node.visibleAttributes || {},
+            attributeOrder: node.attributeOrder || orderedAttrKeys(node),
+            position: node.position
+          });
+        }
+      } finally {
+        btnSnapAll.disabled = false;
+      }
+    });
+  }
   if (btnZoomReset) btnZoomReset.addEventListener('click', () => {
     viewScale = 1;
     viewX = 0;
@@ -2481,6 +2543,369 @@
   function escapeHtml(s) {
     return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+
+
+  // --- Report / structured query ---
+  let lastReportRows = [];
+
+  function openReportModal() {
+    if (!currentGraph) {
+      alert('Select or create a graph first');
+      return;
+    }
+    const modal = document.getElementById('reportModal');
+    if (!modal) return;
+    // populate attribute key suggestions
+    const keys = new Set();
+    for (const n of Object.values(currentGraph.nodes || {})) {
+      Object.keys(n.attributes || {}).forEach(k => keys.add(k));
+    }
+    for (const e of Object.values(currentGraph.edges || {})) {
+      Object.keys(e.attributes || {}).forEach(k => keys.add(k));
+    }
+    for (const g of Object.values(currentGraph.groups || {})) {
+      Object.keys(g.attributes || {}).forEach(k => keys.add(k));
+    }
+    const dl = document.getElementById('reportAttrKeyList');
+    if (dl) {
+      dl.innerHTML = '';
+      [...keys].sort().forEach(k => {
+        const opt = document.createElement('option');
+        opt.value = k;
+        dl.appendChild(opt);
+      });
+    }
+    modal.classList.remove('hidden');
+    // Show everything by default when opening
+    runReportQuery();
+  }
+
+  function closeReportModal() {
+    const modal = document.getElementById('reportModal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  function attrMatch(attrs, key, val, mode) {
+    attrs = attrs || {};
+    const k = (key || '').trim();
+    if (!k) {
+      // no attr filter
+      return true;
+    }
+    if (mode === 'exists') {
+      return Object.prototype.hasOwnProperty.call(attrs, k);
+    }
+    if (!Object.prototype.hasOwnProperty.call(attrs, k)) return false;
+    const av = String(attrs[k] ?? '');
+    const needle = String(val ?? '');
+    if (mode === 'equals') return av === needle;
+    // contains (default)
+    if (!needle) return true; // key exists, any value
+    return av.toLowerCase().includes(needle.toLowerCase());
+  }
+
+  function labelMatch(label, filter) {
+    const f = (filter || '').trim().toLowerCase();
+    if (!f) return true;
+    return String(label || '').toLowerCase().includes(f);
+  }
+
+  function formatAttrs(attrs) {
+    const a = attrs || {};
+    const keys = Object.keys(a);
+    if (!keys.length) return '';
+    return keys.map(k => k + ': ' + a[k]).join('\n');
+  }
+
+  function runReportQuery() {
+    if (!currentGraph) {
+      alert('No graph loaded');
+      return;
+    }
+    const type = (document.getElementById('reportType') || {}).value || 'all';
+    const labelF = (document.getElementById('reportLabel') || {}).value || '';
+    const attrKey = (document.getElementById('reportAttrKey') || {}).value || '';
+    const attrVal = (document.getElementById('reportAttrVal') || {}).value || '';
+    const attrMode = (document.getElementById('reportAttrMatch') || {}).value || 'contains';
+
+    const rows = [];
+
+    if (type === 'all' || type === 'node') {
+      for (const n of Object.values(currentGraph.nodes || {})) {
+        if (!labelMatch(n.label, labelF)) continue;
+        if (!attrMatch(n.attributes, attrKey, attrVal, attrMode)) continue;
+        rows.push({
+          type: 'node',
+          id: n.id,
+          label: n.label || '',
+          attributes: { ...(n.attributes || {}) },
+          note: n.note || '',
+          extra: ''
+        });
+      }
+    }
+    if (type === 'all' || type === 'edge') {
+      for (const e of Object.values(currentGraph.edges || {})) {
+        if (!labelMatch(e.label, labelF)) continue;
+        if (!attrMatch(e.attributes, attrKey, attrVal, attrMode)) continue;
+        rows.push({
+          type: 'edge',
+          id: e.id,
+          label: e.label || '',
+          attributes: { ...(e.attributes || {}) },
+          note: e.note || '',
+          extra: endpointLabel(e.from) + ' → ' + endpointLabel(e.to)
+        });
+      }
+    }
+    if (type === 'all' || type === 'group') {
+      for (const g of Object.values(currentGraph.groups || {})) {
+        if (!labelMatch(g.label, labelF)) continue;
+        if (!attrMatch(g.attributes, attrKey, attrVal, attrMode)) continue;
+        rows.push({
+          type: 'group',
+          id: g.id,
+          label: g.label || '',
+          attributes: { ...(g.attributes || {}) },
+          note: g.note || '',
+          extra: ((g.nodeIds || []).length) + ' members'
+        });
+      }
+    }
+
+    // stable sort: type then label
+    rows.sort((a, b) => (a.type + a.label).localeCompare(b.type + b.label));
+    lastReportRows = rows;
+    renderReportTable(rows);
+  }
+
+  function renderReportTable(rows) {
+    const body = document.getElementById('reportBody');
+    const count = document.getElementById('reportCount');
+    if (count) count.textContent = rows.length + ' result' + (rows.length === 1 ? '' : 's');
+    if (!body) return;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="6" class="report-empty">No matches</td></tr>';
+      return;
+    }
+    body.innerHTML = '';
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><span class="report-type-badge ${row.type}">${row.type}</span></td>
+        <td>
+          <strong>${escapeHtml(row.label)}</strong>
+          ${row.extra ? '<div style="color:var(--muted);font-size:0.75rem;margin-top:2px">' + escapeHtml(row.extra) + '</div>' : ''}
+        </td>
+        <td style="color:var(--muted);font-size:0.75rem;max-width:100px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(row.id)}</td>
+        <td class="report-attrs">${escapeHtml(formatAttrs(row.attributes))}</td>
+        <td style="max-width:160px;white-space:pre-wrap;word-break:break-word">${escapeHtml(row.note)}</td>
+        <td><button type="button" class="btn-icon report-goto" data-type="${row.type}" data-id="${escapeAttr(row.id)}" title="Select in graph">↗</button></td>
+      `;
+      body.appendChild(tr);
+    }
+    body.querySelectorAll('.report-goto').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const typ = btn.dataset.type;
+        const id = btn.dataset.id;
+        closeReportModal();
+        select(typ, id);
+        render();
+      });
+    });
+  }
+
+  function exportReportCsv() {
+    if (!lastReportRows.length) {
+      alert('Run a query first');
+      return;
+    }
+    const esc = (v) => {
+      const s = String(v ?? '');
+      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    };
+    const lines = ['type,label,id,attributes,note,extra'];
+    for (const r of lastReportRows) {
+      lines.push([
+        esc(r.type),
+        esc(r.label),
+        esc(r.id),
+        esc(formatAttrs(r.attributes).replace(/\n/g, '; ')),
+        esc(r.note),
+        esc(r.extra)
+      ].join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (currentGraph && currentGraph.name ? currentGraph.name : 'report') + '-report.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportReportJson() {
+    if (!lastReportRows.length) {
+      alert('Run a query first');
+      return;
+    }
+    const payload = {
+      graph: currentGraph ? currentGraph.name : '',
+      generatedAt: new Date().toISOString(),
+      count: lastReportRows.length,
+      results: lastReportRows
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (currentGraph && currentGraph.name ? currentGraph.name : 'report') + '-report.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  if (btnReport) btnReport.addEventListener('click', openReportModal);
+
+  // Event delegation so handlers work even if modal markup loads later
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (t.id === 'reportClose' || t.closest('#reportClose')) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeReportModal();
+      return;
+    }
+    if (t.id === 'reportRun' || t.closest('#reportRun')) {
+      e.preventDefault();
+      runReportQuery();
+      return;
+    }
+    if (t.id === 'reportExportCsv' || t.closest('#reportExportCsv')) {
+      e.preventDefault();
+      exportReportCsv();
+      return;
+    }
+    if (t.id === 'reportExportJson' || t.closest('#reportExportJson')) {
+      e.preventDefault();
+      exportReportJson();
+      return;
+    }
+    // backdrop click
+    if (t.id === 'reportModal') {
+      closeReportModal();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const modal = document.getElementById('reportModal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    if (e.key === 'Escape') {
+      closeReportModal();
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'TEXTAREA') return;
+      e.preventDefault();
+      runReportQuery();
+    }
+  });
+
+
+  // Report panel resize
+  (function initReportResize() {
+    let rs = null; // { mode, startX, startY, startW, startH }
+
+    function panel() {
+      return document.getElementById('reportPanel');
+    }
+
+    function applySavedSize() {
+      const p = panel();
+      if (!p) return;
+      try {
+        const saved = JSON.parse(localStorage.getItem('graphdb-report-size') || 'null');
+        if (saved && saved.w) p.style.width = saved.w + 'px';
+        if (saved && saved.h) p.style.height = saved.h + 'px';
+      } catch (_) {}
+    }
+
+    function saveSize() {
+      const p = panel();
+      if (!p) return;
+      try {
+        localStorage.setItem('graphdb-report-size', JSON.stringify({
+          w: Math.round(p.getBoundingClientRect().width),
+          h: Math.round(p.getBoundingClientRect().height)
+        }));
+      } catch (_) {}
+    }
+
+    function onMove(e) {
+      if (!rs) return;
+      const p = panel();
+      if (!p) return;
+      const dx = e.clientX - rs.startX;
+      const dy = e.clientY - rs.startY;
+      if (rs.mode === 'e' || rs.mode === 'se') {
+        const w = Math.min(window.innerWidth * 0.98, Math.max(420, rs.startW + dx));
+        p.style.width = w + 'px';
+      }
+      if (rs.mode === 's' || rs.mode === 'se') {
+        const h = Math.min(window.innerHeight * 0.96, Math.max(320, rs.startH + dy));
+        p.style.height = h + 'px';
+      }
+    }
+
+    function onUp() {
+      if (!rs) return;
+      const p = panel();
+      if (p) p.classList.remove('resizing');
+      saveSize();
+      rs = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+
+    function start(mode, e) {
+      const p = panel();
+      if (!p) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = p.getBoundingClientRect();
+      rs = {
+        mode,
+        startX: e.clientX,
+        startY: e.clientY,
+        startW: rect.width,
+        startH: rect.height
+      };
+      p.classList.add('resizing');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }
+
+    document.addEventListener('mousedown', (e) => {
+      const t = e.target;
+      if (!t || !t.id) return;
+      if (t.id === 'reportResizeE') start('e', e);
+      else if (t.id === 'reportResizeS') start('s', e);
+      else if (t.id === 'reportResizeSE') start('se', e);
+    });
+
+    // apply when opening
+    const _open = openReportModal;
+    openReportModal = function () {
+      _open();
+      applySavedSize();
+    };
+  })();
 
   // --- Init ---
   refreshGraphList().then(() => {

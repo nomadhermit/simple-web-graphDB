@@ -1013,3 +1013,31 @@ body.linking .group-shape {
 .export-menu button:hover {
   background: rgba(59, 130, 246, 0.15);
 }
+
+/* Unsaved changes — Save button attention */
+button.unsaved {
+  background: #ea580c !important;
+  border-color: #c2410c !important;
+  color: #fff !important;
+  animation: save-flash 1.1s ease-in-out infinite;
+}
+button.unsaved:hover {
+  background: #f97316 !important;
+}
+@keyframes save-flash {
+  0%, 100% { background: #ea580c; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.55); }
+  50% { background: #f97316; box-shadow: 0 0 0 6px rgba(249, 115, 22, 0); }
+}
+
+/* Lasso / marquee selection */
+.lasso-rect {
+  position: absolute;
+  border: 1.5px dashed #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  pointer-events: none;
+  z-index: 20;
+  box-sizing: border-box;
+}
+.lasso-rect.hidden {
+  display: none;
+}

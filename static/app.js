@@ -4,6 +4,8 @@
   let selectedId = null;   // node / edge / group id
   let selectedType = null; // 'node' | 'edge' | 'group'
   let selectedNodeIds = new Set(); // multi-select nodes for grouping
+  // Clipboard: { nodes: [...], groups: [{..., memberOrigIds: []}] } — paste assigns new IDs
+  let graphClipboard = null;
   let selectedGroupIds = new Set(); // multi-select groups for parent grouping
   let dragState = null;    // { id, startX, startY, origX, origY }
   let linkFromId = null;   // when set, next node click creates a relationship from this id
@@ -13,7 +15,14 @@
   let viewX = 0;
   let viewY = 0;
   let panState = null; // { startClientX, startClientY, origX, origY }
+  let lassoState = null; // { startClientX, startClientY, startWorld, additive }
+  let lassoJustFinished = false; // suppress clearSelection on trailing click
   let snapToGrid = false;
+  let graphDirty = false;
+  let historyStack = [];
+  let redoStack = [];
+  let historySuspended = false;
+  const HISTORY_LIMIT = 50;
   const GRID_SIZE = 20;
 
   const NODE_W = 160;
@@ -28,6 +37,8 @@
   const newMenu = document.getElementById('newMenu');
   const btnNewEmpty = document.getElementById('btnNewEmpty');
   const btnSave = document.getElementById('btnSave');
+  const btnUndo = document.getElementById('btnUndo');
+  const btnRedo = document.getElementById('btnRedo');
   const btnExport = document.getElementById('btnExport');
   const exportMenu = document.getElementById('exportMenu');
   const btnExportPng = document.getElementById('btnExportPng');
@@ -38,6 +49,8 @@
   const jsonFileInput = document.getElementById('jsonFileInput');
   const btnDeleteGraph = document.getElementById('btnDeleteGraph');
   const btnAddNode = document.getElementById('btnAddNode');
+  const btnCopyNode = document.getElementById('btnCopyNode');
+  const btnPasteNode = document.getElementById('btnPasteNode');
   const btnAddEdge = document.getElementById('btnAddEdge');
   const btnGroup = document.getElementById('btnGroup');
   const btnDeleteSelected = document.getElementById('btnDeleteSelected');
@@ -64,7 +77,146 @@
   const modalConfirm = document.getElementById('modalConfirm');
 
   // --- API helpers ---
+  function setGraphDirty(dirty) {
+    graphDirty = !!dirty;
+    if (!btnSave) return;
+    btnSave.classList.toggle('unsaved', graphDirty);
+    if (graphDirty) {
+      btnSave.title = 'Unsaved changes — click to save graph JSON';
+    } else {
+      btnSave.title = 'Save current graph';
+      if (btnSave.textContent !== 'Save' && btnSave.textContent !== 'Saved ✓') {
+        btnSave.textContent = 'Save';
+      }
+    }
+  }
+
+  function cloneGraphState(g) {
+    if (!g) return null;
+    return JSON.parse(JSON.stringify({
+      name: g.name,
+      nodes: g.nodes || {},
+      edges: g.edges || {},
+      groups: g.groups || {}
+    }));
+  }
+
+  function updateHistoryButtons() {
+    if (btnUndo) {
+      btnUndo.disabled = historyStack.length === 0;
+      btnUndo.title = historyStack.length
+        ? ('Undo last change (' + historyStack.length + ' step' + (historyStack.length === 1 ? '' : 's') + ')')
+        : 'Nothing to undo';
+    }
+    if (btnRedo) {
+      btnRedo.disabled = redoStack.length === 0;
+      btnRedo.title = redoStack.length
+        ? ('Redo last undone change (' + redoStack.length + ' step' + (redoStack.length === 1 ? '' : 's') + ')')
+        : 'Nothing to redo';
+    }
+  }
+
+  function clearHistory() {
+    historyStack = [];
+    redoStack = [];
+    updateHistoryButtons();
+  }
+
+  function pushHistory() {
+    if (historySuspended || !currentGraph) return;
+    try {
+      historyStack.push(cloneGraphState(currentGraph));
+      if (historyStack.length > HISTORY_LIMIT) {
+        historyStack.splice(0, historyStack.length - HISTORY_LIMIT);
+      }
+      // New edit invalidates redo chain
+      redoStack = [];
+      updateHistoryButtons();
+    } catch (_) {}
+  }
+
+  async function applyGraphSnapshot(snapshot) {
+    if (!currentGraph || !snapshot) return false;
+    const name = currentGraph.name;
+    const restored = {
+      name: name,
+      nodes: snapshot.nodes || {},
+      edges: snapshot.edges || {},
+      groups: snapshot.groups || {}
+    };
+    historySuspended = true;
+    try {
+      await api('PUT', `/api/graphs/${encodeURIComponent(name)}`, restored);
+      currentGraph = normalizeGraph(restored);
+      clearSelection();
+      setGraphDirty(true);
+      render();
+      return true;
+    } catch (e) {
+      alert('History restore failed: ' + e.message);
+      return false;
+    } finally {
+      historySuspended = false;
+    }
+  }
+
+  async function undoLastChange() {
+    if (!historyStack.length || !currentGraph) return;
+    const prev = historyStack.pop();
+    if (!prev) {
+      updateHistoryButtons();
+      return;
+    }
+    // Current state becomes redo target
+    const currentSnap = cloneGraphState(currentGraph);
+    const ok = await applyGraphSnapshot(prev);
+    if (ok) {
+      if (currentSnap) {
+        redoStack.push(currentSnap);
+        if (redoStack.length > HISTORY_LIMIT) {
+          redoStack.splice(0, redoStack.length - HISTORY_LIMIT);
+        }
+      }
+    } else {
+      historyStack.push(prev);
+    }
+    updateHistoryButtons();
+  }
+
+  async function redoLastChange() {
+    if (!redoStack.length || !currentGraph) return;
+    const next = redoStack.pop();
+    if (!next) {
+      updateHistoryButtons();
+      return;
+    }
+    const currentSnap = cloneGraphState(currentGraph);
+    const ok = await applyGraphSnapshot(next);
+    if (ok) {
+      if (currentSnap) {
+        historyStack.push(currentSnap);
+        if (historyStack.length > HISTORY_LIMIT) {
+          historyStack.splice(0, historyStack.length - HISTORY_LIMIT);
+        }
+      }
+    } else {
+      redoStack.push(next);
+    }
+    updateHistoryButtons();
+  }
+
   async function api(method, path, body) {
+    const isGraphPath = typeof path === 'string' && path.startsWith('/api/graphs');
+    const isFullSave = method === 'PUT' && isGraphPath && /^\/api\/graphs\/[^/]+$/.test(path);
+    const isCreateGraph = method === 'POST' && path === '/api/graphs';
+    const isDeleteGraph = method === 'DELETE' && isGraphPath && /^\/api\/graphs\/[^/]+$/.test(path);
+    const isMutating = method !== 'GET' && isGraphPath && !isCreateGraph && !isDeleteGraph;
+
+    // Snapshot before mutation (skip during undo restore and explicit Save)
+    if (isMutating && !isFullSave && !historySuspended) {
+      pushHistory();
+    }
+
     const opts = { method, headers: {} };
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
@@ -74,6 +226,9 @@
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || res.statusText);
+    }
+    if (isMutating && !isFullSave) {
+      setGraphDirty(true);
     }
     if (res.status === 204) return null;
     return res.json();
@@ -126,12 +281,16 @@
     if (!name) {
       currentGraph = null;
       clearSelection();
+      clearHistory();
+      setGraphDirty(false);
       render();
       return;
     }
     try {
       currentGraph = normalizeGraph(await api('GET', `/api/graphs/${encodeURIComponent(name)}`));
       clearSelection();
+      clearHistory();
+      setGraphDirty(false);
       render();
     } catch (e) {
       alert('Failed to load: ' + e.message);
@@ -145,6 +304,8 @@
       await refreshGraphList();
       graphSelect.value = currentGraph.name;
       clearSelection();
+      clearHistory();
+      setGraphDirty(false);
       render();
     } catch (e) {
       alert('Failed to create: ' + e.message);
@@ -155,9 +316,12 @@
     if (!currentGraph) return;
     try {
       await api('PUT', `/api/graphs/${encodeURIComponent(currentGraph.name)}`, currentGraph);
+      setGraphDirty(false);
       // visual feedback
       btnSave.textContent = 'Saved ✓';
-      setTimeout(() => { btnSave.textContent = 'Save'; }, 1200);
+      setTimeout(() => {
+        if (!graphDirty) btnSave.textContent = 'Save';
+      }, 1200);
     } catch (e) {
       alert('Save failed: ' + e.message);
     }
@@ -348,6 +512,258 @@
     } catch (e) {
       alert('Failed to add node: ' + e.message);
     }
+  }
+
+  function snapshotNode(n, origId) {
+    return {
+      origId: origId || n.id,
+      label: n.label || 'Entity',
+      note: n.note || '',
+      attributes: { ...(n.attributes || {}) },
+      visibleAttributes: { ...(n.visibleAttributes || {}) },
+      attributeOrder: Array.isArray(n.attributeOrder) ? n.attributeOrder.slice() : [],
+      position: { x: (n.position && n.position.x) || 0, y: (n.position && n.position.y) || 0 }
+    };
+  }
+
+  function snapshotGroup(grp, origId) {
+    return {
+      origId: origId || grp.id,
+      label: grp.label || 'Group',
+      note: grp.note || '',
+      attributes: { ...(grp.attributes || {}) },
+      visibleAttributes: { ...(grp.visibleAttributes || {}) },
+      attributeOrder: Array.isArray(grp.attributeOrder) ? grp.attributeOrder.slice() : [],
+      color: grp.color || '',
+      memberOrigIds: (grp.nodeIds || []).slice()
+    };
+  }
+
+  function snapshotEdge(edge) {
+    return {
+      fromOrigId: edge.from,
+      toOrigId: edge.to,
+      label: edge.label || 'relates',
+      note: edge.note || '',
+      attributes: { ...(edge.attributes || {}) }
+    };
+  }
+
+  function buildClipboardFromSelection() {
+    if (!currentGraph) return null;
+    const groupIds = new Set(selectedGroupIds);
+    if (selectedType === 'group' && selectedId) groupIds.add(selectedId);
+
+    const nodeIds = new Set(selectedNodeIds);
+    if (selectedType === 'node' && selectedId) nodeIds.add(selectedId);
+
+    // Include all members of selected groups
+    for (const gid of groupIds) {
+      const g = currentGraph.groups[gid];
+      if (!g) continue;
+      for (const nid of g.nodeIds || []) nodeIds.add(nid);
+    }
+
+    if (!nodeIds.size && !groupIds.size) return null;
+
+    // Endpoints eligible for internal relationships: selected nodes, group members, and groups
+    const endpointIds = new Set([...nodeIds, ...groupIds]);
+
+    const nodes = [];
+    for (const id of nodeIds) {
+      const n = currentGraph.nodes[id];
+      if (n) nodes.push(snapshotNode(n, id));
+    }
+    const groups = [];
+    for (const gid of groupIds) {
+      const g = currentGraph.groups[gid];
+      if (g) groups.push(snapshotGroup(g, gid));
+    }
+    // Only relationships whose both ends are inside the multi-select (incl. group members)
+    const edges = [];
+    for (const edge of Object.values(currentGraph.edges || {})) {
+      if (!edge) continue;
+      if (!endpointIds.has(edge.from) || !endpointIds.has(edge.to)) continue;
+      edges.push(snapshotEdge(edge));
+    }
+    return { nodes, groups, edges, version: 3 };
+  }
+
+  function normalizeClipboard(raw) {
+    if (!raw) return null;
+    // Legacy: plain array of nodes
+    if (Array.isArray(raw)) {
+      if (!raw.length) return null;
+      return {
+        nodes: raw.map((n, i) => ({
+          origId: n.origId || ('legacy_' + i),
+          label: n.label || 'Entity',
+          note: n.note || '',
+          attributes: { ...(n.attributes || {}) },
+          visibleAttributes: { ...(n.visibleAttributes || {}) },
+          attributeOrder: Array.isArray(n.attributeOrder) ? n.attributeOrder.slice() : [],
+          position: n.position || { x: 100, y: 100 }
+        })),
+        groups: [],
+        edges: []
+      };
+    }
+    if (raw.nodes || raw.groups || raw.edges) {
+      return {
+        nodes: Array.isArray(raw.nodes) ? raw.nodes : [],
+        groups: Array.isArray(raw.groups) ? raw.groups : [],
+        edges: Array.isArray(raw.edges) ? raw.edges : []
+      };
+    }
+    return null;
+  }
+
+  function loadClipboard() {
+    let clip = normalizeClipboard(graphClipboard);
+    if (clip && (clip.nodes.length || clip.groups.length)) return clip;
+    try {
+      const raw = localStorage.getItem('graphdb-clipboard');
+      if (raw) {
+        clip = normalizeClipboard(JSON.parse(raw));
+        if (clip && (clip.nodes.length || clip.groups.length)) return clip;
+      }
+    } catch (_) {}
+    // migrate old key
+    try {
+      const raw = localStorage.getItem('graphdb-node-clipboard');
+      if (raw) {
+        clip = normalizeClipboard(JSON.parse(raw));
+        if (clip && clip.nodes.length) return clip;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function copySelectedNodes() {
+    const clip = buildClipboardFromSelection();
+    if (!clip) {
+      alert('Select one or more nodes and/or groups to copy');
+      return;
+    }
+    graphClipboard = clip;
+    try {
+      localStorage.setItem('graphdb-clipboard', JSON.stringify(clip));
+    } catch (_) {}
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(JSON.stringify({ graphdbClipboard: clip }, null, 2));
+      }
+    } catch (_) {}
+  }
+
+  async function pasteNodes() {
+    if (!currentGraph) {
+      alert('Select or create a graph first');
+      return;
+    }
+    const clip = loadClipboard();
+    if (!clip || (!clip.nodes.length && !clip.groups.length)) {
+      alert('Nothing to paste — copy a node or group first');
+      return;
+    }
+
+    const offset = 40;
+    const idMap = {}; // origId -> newId
+    const createdNodeIds = [];
+    const createdGroupIds = [];
+
+    pushHistory();
+    historySuspended = true;
+    try {
+      // 1) Create all unique nodes (standalone + group members)
+      for (let i = 0; i < clip.nodes.length; i++) {
+        const src = clip.nodes[i];
+        const orig = src.origId || ('n_tmp_' + i);
+        if (idMap[orig]) continue;
+        const pos = src.position || { x: 100, y: 100 };
+        const body = {
+          label: src.label || 'Entity',
+          note: src.note || '',
+          attributes: { ...(src.attributes || {}) },
+          visibleAttributes: { ...(src.visibleAttributes || {}) },
+          attributeOrder: Array.isArray(src.attributeOrder) ? src.attributeOrder.slice() : [],
+          position: { x: pos.x + offset, y: pos.y + offset }
+        };
+        const node = await api('POST', `/api/graphs/${encodeURIComponent(currentGraph.name)}/nodes`, body);
+        currentGraph.nodes[node.id] = node;
+        idMap[orig] = node.id;
+        createdNodeIds.push(node.id);
+      }
+
+      // 2) Create groups with remapped member IDs
+      if (!currentGraph.groups) currentGraph.groups = {};
+      for (let gi = 0; gi < (clip.groups || []).length; gi++) {
+        const gsrc = clip.groups[gi];
+        const memberIds = [];
+        for (const oid of gsrc.memberOrigIds || []) {
+          const nid = idMap[oid];
+          if (nid) memberIds.push(nid);
+        }
+        if (!memberIds.length) continue;
+        const body = {
+          label: gsrc.label || 'Group',
+          note: gsrc.note || '',
+          nodeIds: memberIds,
+          attributes: { ...(gsrc.attributes || {}) },
+          visibleAttributes: { ...(gsrc.visibleAttributes || {}) },
+          attributeOrder: Array.isArray(gsrc.attributeOrder) ? gsrc.attributeOrder.slice() : [],
+          color: gsrc.color || ''
+        };
+        const grp = await api('POST', `/api/graphs/${encodeURIComponent(currentGraph.name)}/groups`, body);
+        currentGraph.groups[grp.id] = grp;
+        createdGroupIds.push(grp.id);
+        const gOrig = gsrc.origId || ('g_tmp_' + gi);
+        idMap[gOrig] = grp.id;
+      }
+
+      // 3) Create internal relationships (both endpoints in the paste set)
+      if (!currentGraph.edges) currentGraph.edges = {};
+      for (const esrc of clip.edges || []) {
+        const fromId = idMap[esrc.fromOrigId];
+        const toId = idMap[esrc.toOrigId];
+        if (!fromId || !toId) continue; // skip edges to outside selection
+        const body = {
+          from: fromId,
+          to: toId,
+          label: esrc.label || 'relates',
+          note: esrc.note || '',
+          attributes: { ...(esrc.attributes || {}) }
+        };
+        const edge = await api('POST', `/api/graphs/${encodeURIComponent(currentGraph.name)}/edges`, body);
+        currentGraph.edges[edge.id] = edge;
+      }
+
+      selectedNodeIds = new Set(createdGroupIds.length ? [] : createdNodeIds);
+      selectedGroupIds = new Set(createdGroupIds);
+      if (createdGroupIds.length) {
+        selectedId = createdGroupIds[0];
+        selectedType = 'group';
+      } else if (createdNodeIds.length) {
+        selectedNodeIds = new Set(createdNodeIds);
+        selectedId = createdNodeIds[0];
+        selectedType = 'node';
+      } else {
+        selectedId = null;
+        selectedType = null;
+      }
+      render();
+    } catch (e) {
+      alert('Paste failed: ' + e.message);
+      render();
+    } finally {
+      historySuspended = false;
+    }
+  }
+
+  // Back-compat alias used by keyboard handler checks
+  function collectSelectedNodesForCopy() {
+    const clip = buildClipboardFromSelection();
+    return clip ? clip.nodes : [];
   }
 
   async function updateNode(id, patch) {
@@ -798,7 +1214,7 @@
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.classList.add('node-group');
     g.dataset.id = node.id;
-    if (selectedType === 'node' && (selectedId === node.id || selectedNodeIds.has(node.id))) {
+    if (selectedId === node.id || selectedNodeIds.has(node.id)) {
       g.classList.add('selected');
     }
     if (linkFromId === node.id) g.classList.add('link-source');
@@ -1469,7 +1885,7 @@
         const val = document.getElementById('newAttrVal').value;
         if (!key) return;
         const attrs = { ...(node.attributes || {}), [key]: val };
-        const vis = { ...(node.visibleAttributes || {}), [key]: true };
+        const vis = { ...(node.visibleAttributes || {}), [key]: false };
         const order = orderedAttrKeys(node);
         if (!order.includes(key)) order.push(key);
         patchNode({ attributes: attrs, visibleAttributes: vis, attributeOrder: order });
@@ -1748,7 +2164,7 @@
         const val = document.getElementById('newGroupAttrVal').value;
         if (!key) return;
         const attrs = { ...(grp.attributes || {}), [key]: val };
-        const vis = { ...(grp.visibleAttributes || {}), [key]: true };
+        const vis = { ...(grp.visibleAttributes || {}), [key]: false };
         const order = orderedAttrKeys(grp);
         if (!order.includes(key)) order.push(key);
         patchGroup({ attributes: attrs, visibleAttributes: vis, attributeOrder: order });
@@ -2128,8 +2544,46 @@
   }
 
   btnSave.addEventListener('click', saveGraph);
+  if (btnUndo) {
+    btnUndo.addEventListener('click', () => undoLastChange());
+  }
+  if (btnRedo) {
+    btnRedo.addEventListener('click', () => redoLastChange());
+  }
+  updateHistoryButtons();
   btnDeleteGraph.addEventListener('click', deleteGraph);
   btnAddNode.addEventListener('click', addNode);
+  if (btnCopyNode) btnCopyNode.addEventListener('click', copySelectedNodes);
+  if (btnPasteNode) btnPasteNode.addEventListener('click', pasteNodes);
+
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+    const k = (e.key || '').toLowerCase();
+    if (k === 'c') {
+      if (buildClipboardFromSelection()) {
+        e.preventDefault();
+        copySelectedNodes();
+      }
+    } else if (k === 'v') {
+      if (loadClipboard()) {
+        e.preventDefault();
+        pasteNodes();
+      }
+    } else if (k === 'z' && !e.shiftKey) {
+      if (historyStack.length) {
+        e.preventDefault();
+        undoLastChange();
+      }
+    } else if (k === 'y' || (k === 'z' && e.shiftKey)) {
+      if (redoStack.length) {
+        e.preventDefault();
+        redoLastChange();
+      }
+    }
+  });
 
   if (btnExport && exportMenu) {
     btnExport.addEventListener('click', (e) => {
@@ -3576,6 +4030,10 @@ body.props-open .props-toggle { display:none; }
   // click on empty canvas deselects / cancels link mode
   graphSvg.addEventListener('click', (e) => {
     if (panState && panState.moved) return; // ignore click after pan
+    if (lassoJustFinished) {
+      lassoJustFinished = false;
+      return;
+    }
     if (e.target === graphSvg || e.target.id === 'viewport' || e.target.id === 'edgesLayer' || e.target.id === 'nodesLayer' || e.target.id === 'groupsLayer') {
       if (linkFromId) {
         cancelLinkMode();
@@ -3585,7 +4043,8 @@ body.props-open .props-toggle { display:none; }
     }
   });
 
-  // Pan: drag on empty background (or middle mouse / space held)
+  // Pan: drag on empty background (middle mouse, or left without Shift)
+  // Lasso: Shift + left-drag on empty background
   graphSvg.addEventListener('mousedown', (e) => {
     if (linkFromId) return;
     const onBackground = e.target === graphSvg || e.target.id === 'viewport' || e.target.id === 'edgesLayer' || e.target.id === 'groupsLayer' || e.target.id === 'nodesLayer';
@@ -3593,6 +4052,30 @@ body.props-open .props-toggle { display:none; }
     const leftOnBg = e.button === 0 && onBackground;
     if (!middle && !leftOnBg) return;
     e.preventDefault();
+
+    // Shift+left-drag on background → rectangular lasso select
+    if (leftOnBg && e.shiftKey) {
+      const world = screenToWorld(e.clientX, e.clientY);
+      lassoState = {
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startWorld: world,
+        additive: e.ctrlKey || e.metaKey,
+        moved: false
+      };
+      const el = document.getElementById('lassoRect');
+      if (el) {
+        el.classList.remove('hidden');
+        el.style.left = e.clientX + 'px';
+        el.style.top = e.clientY + 'px';
+        el.style.width = '0px';
+        el.style.height = '0px';
+      }
+      document.addEventListener('mousemove', onLassoMove);
+      document.addEventListener('mouseup', onLassoEnd);
+      return;
+    }
+
     panState = {
       startClientX: e.clientX,
       startClientY: e.clientY,
@@ -3621,6 +4104,98 @@ body.props-open .props-toggle { display:none; }
     document.removeEventListener('mouseup', onPanEnd);
     // keep panState briefly so click handler can see .moved
     setTimeout(() => { panState = null; }, 0);
+  }
+
+  function onLassoMove(e) {
+    if (!lassoState) return;
+    const x1 = lassoState.startClientX;
+    const y1 = lassoState.startClientY;
+    const x2 = e.clientX;
+    const y2 = e.clientY;
+    if (Math.abs(x2 - x1) > 3 || Math.abs(y2 - y1) > 3) lassoState.moved = true;
+    const pane = document.getElementById('graphPane');
+    const prect = pane ? pane.getBoundingClientRect() : { left: 0, top: 0 };
+    const left = Math.min(x1, x2) - prect.left;
+    const top = Math.min(y1, y2) - prect.top;
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
+    const el = document.getElementById('lassoRect');
+    if (el) {
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+      el.style.width = width + 'px';
+      el.style.height = height + 'px';
+    }
+  }
+
+  function rectsIntersect(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function onLassoEnd(e) {
+    document.removeEventListener('mousemove', onLassoMove);
+    document.removeEventListener('mouseup', onLassoEnd);
+    const el = document.getElementById('lassoRect');
+    if (el) {
+      el.classList.add('hidden');
+      el.style.width = '0px';
+      el.style.height = '0px';
+    }
+    if (!lassoState || !currentGraph) {
+      lassoState = null;
+      return;
+    }
+    if (!lassoState.moved) {
+      lassoState = null;
+      return;
+    }
+    lassoJustFinished = true;
+    const endWorld = screenToWorld(e.clientX, e.clientY);
+    const x1 = Math.min(lassoState.startWorld.x, endWorld.x);
+    const y1 = Math.min(lassoState.startWorld.y, endWorld.y);
+    const x2 = Math.max(lassoState.startWorld.x, endWorld.x);
+    const y2 = Math.max(lassoState.startWorld.y, endWorld.y);
+    const box = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+
+    const hitNodes = [];
+    for (const node of Object.values(currentGraph.nodes || {})) {
+      if (!node || !node.position) continue;
+      const nb = {
+        x: node.position.x,
+        y: node.position.y,
+        w: NODE_W,
+        h: nodeHeight(node)
+      };
+      if (rectsIntersect(box, nb)) hitNodes.push(node.id);
+    }
+    const hitGroups = [];
+    for (const grp of Object.values(currentGraph.groups || {})) {
+      const gb = groupBounds(grp);
+      if (!gb) continue;
+      if (rectsIntersect(box, { x: gb.x, y: gb.y, w: gb.w, h: gb.h })) {
+        hitGroups.push(grp.id);
+      }
+    }
+
+    if (!lassoState.additive) {
+      selectedNodeIds = new Set();
+      selectedGroupIds = new Set();
+    }
+    for (const id of hitNodes) selectedNodeIds.add(id);
+    for (const id of hitGroups) selectedGroupIds.add(id);
+
+    if (selectedGroupIds.size) {
+      selectedType = 'group';
+      selectedId = [...selectedGroupIds][0];
+    } else if (selectedNodeIds.size) {
+      selectedType = 'node';
+      selectedId = [...selectedNodeIds][0];
+    } else {
+      selectedType = null;
+      selectedId = null;
+    }
+    lassoState = null;
+    render();
   }
 
   // Wheel zoom (toward cursor)

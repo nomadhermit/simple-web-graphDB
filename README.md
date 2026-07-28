@@ -2,9 +2,7 @@
 
 A lightweight local graph database with a visual ERD-inspired UI, written in pure Go (standard library only) + vanilla HTML/CSS/JS.
 
-!! for local use only, not for internet facing scenarios without proper security enhancements and review !!
-
-!! vibe coded with Grok as experiment !!
+**Architecture:** see [architecture.md](architecture.md) for a flow diagram of the application layers, API, data model, and request paths.
 
 ## Features
 

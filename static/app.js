@@ -1566,12 +1566,12 @@
             <input type="text" value="${escapeAttr(edge.id)}" readonly />
           </div>
           <div class="props-row">
-            <span class="props-label">Type</span>
-            <input type="text" id="propEdgeLabel" value="${escapeAttr(edge.label)}" />
-          </div>
-          <div class="props-row">
             <span class="props-label">From</span>
             <input type="text" value="${escapeAttr(endpointLabel(edge.from))}" readonly />
+          </div>
+          <div class="props-row">
+            <span class="props-label">Type</span>
+            <input type="text" id="propEdgeLabel" value="${escapeAttr(edge.label)}" />
           </div>
           <div class="props-row">
             <span class="props-label">To</span>
@@ -2831,8 +2831,8 @@
       Object.keys(GRAPH.edges || {}).forEach(function(eid) {
         var edge = GRAPH.edges[eid];
         if (edge.from !== id && edge.to !== id) return;
-        var other = edge.from === id ? edge.to : edge.from;
-        var dir = edge.from === id ? '\\u2192' : '\\u2190';
+        var outbound = edge.from === id;
+        var other = outbound ? edge.to : edge.from;
         var grp = GRAPH.groups[other];
         var members = '';
         if (grp) {
@@ -2842,7 +2842,11 @@
           });
           members = '<div style="color:#94a3b8;font-size:0.78rem;margin-top:3px;padding-left:12px">members: ' + esc(labels.join(', ') || 'none') + '</div>';
         }
-        relHtml += '<div class="rel-item"><span class="rel-dir">' + dir + '</span><strong>' + esc(edge.label) + '</strong> to ' + esc(endpointLabel(other)) + members + '</div>';
+        if (outbound) {
+          relHtml += '<div class="rel-item"><strong>' + esc(edge.label) + '</strong> <span class="rel-dir">to</span> ' + esc(endpointLabel(other)) + members + '</div>';
+        } else {
+          relHtml += '<div class="rel-item"><span class="rel-dir">from</span> <strong>' + esc(edge.label) + '</strong> ' + esc(endpointLabel(other)) + members + '</div>';
+        }
       });
       if (!relHtml) relHtml = '<div style="color:#94a3b8;font-size:0.85rem">No relationships</div>';
       propsContent.className = '';
@@ -2859,8 +2863,8 @@
       propsContent.className = '';
       propsContent.innerHTML =
         '<div class="props-section"><h3>Relationship</h3>' +
-        '<div class="props-row"><span class="props-label">Type</span><div class="props-value">' + esc(edge.label) + '</div></div>' +
         '<div class="props-row"><span class="props-label">From</span><div class="props-value">' + esc(endpointLabel(edge.from)) + '</div></div>' +
+        '<div class="props-row"><span class="props-label">Type</span><div class="props-value">' + esc(edge.label) + '</div></div>' +
         '<div class="props-row"><span class="props-label">To</span><div class="props-value">' + esc(endpointLabel(edge.to)) + '</div></div>' +
         '<div class="props-row"><span class="props-label">Note</span><div class="props-value note">' + esc(edge.note || '') + '</div></div>' +
         '</div><div class="props-section"><h3>Attributes</h3>' + attrsHtml(edge) + '</div>';
@@ -2880,9 +2884,13 @@
       Object.keys(GRAPH.edges || {}).forEach(function(eid) {
         var edge = GRAPH.edges[eid];
         if (edge.from !== id && edge.to !== id) return;
-        var other = edge.from === id ? edge.to : edge.from;
-        var dir = edge.from === id ? '\\u2192' : '\\u2190';
-        relHtml += '<div class="rel-item"><span class="rel-dir">' + dir + '</span><strong>' + esc(edge.label) + '</strong> to ' + esc(endpointLabel(other)) + '</div>';
+        var outbound = edge.from === id;
+        var other = outbound ? edge.to : edge.from;
+        if (outbound) {
+          relHtml += '<div class="rel-item"><strong>' + esc(edge.label) + '</strong> <span class="rel-dir">to</span> ' + esc(endpointLabel(other)) + '</div>';
+        } else {
+          relHtml += '<div class="rel-item"><span class="rel-dir">from</span> <strong>' + esc(edge.label) + '</strong> ' + esc(endpointLabel(other)) + '</div>';
+        }
       });
       if (!relHtml) relHtml = '<div style="color:#94a3b8;font-size:0.85rem">No relationships</div>';
       propsContent.className = '';

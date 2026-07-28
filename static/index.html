@@ -12,18 +12,23 @@
     <div class="toolbar-group">
       <label>Graph:</label>
       <select id="graphSelect"></select>
-      <button id="btnNew" title="Create new graph">New</button>
+      <div class="export-menu-wrap">
+        <button id="btnNew" title="Create or import a graph">New ▾</button>
+        <div id="newMenu" class="export-menu hidden">
+          <button type="button" id="btnNewEmpty">Empty Graph</button>
+          <button type="button" id="btnUploadJson">Import JSON</button>
+        </div>
+      </div>
       <button id="btnSave" title="Save current graph">Save</button>
       <div class="export-menu-wrap">
         <button id="btnExport" title="Export graph">Export ▾</button>
         <div id="exportMenu" class="export-menu hidden">
           <button type="button" id="btnExportPng" data-export="png">PNG image</button>
           <button type="button" id="btnExportMhtml" data-export="html">Interactive HTML</button>
+          <button type="button" id="btnDownloadJson" data-export="json">JSON file</button>
         </div>
       </div>
       <button id="btnReport" title="Search and filter objects by label or attributes">Search</button>
-      <button id="btnDownloadJson" title="Download graph as JSON file">Download JSON</button>
-      <button id="btnUploadJson" title="Upload graph from JSON file">Upload JSON</button>
       <input type="file" id="jsonFileInput" accept="application/json,.json" style="display:none" />
       <button id="btnDeleteGraph" class="danger" title="Delete selected graph">Delete</button>
     </div>

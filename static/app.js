@@ -25,6 +25,8 @@
   // --- DOM refs ---
   const graphSelect = document.getElementById('graphSelect');
   const btnNew = document.getElementById('btnNew');
+  const newMenu = document.getElementById('newMenu');
+  const btnNewEmpty = document.getElementById('btnNewEmpty');
   const btnSave = document.getElementById('btnSave');
   const btnExport = document.getElementById('btnExport');
   const exportMenu = document.getElementById('exportMenu');
@@ -2089,42 +2091,76 @@
     loadGraph(graphSelect.value);
   });
 
-  btnNew.addEventListener('click', () => {
-    showModal('New Graph', 'e.g. customers, schema, ...', (name) => {
-      if (name) createGraph(name);
+  function closeNewMenu() {
+    if (newMenu) newMenu.classList.add('hidden');
+  }
+  function closeExportMenu() {
+    if (exportMenu) exportMenu.classList.add('hidden');
+  }
+  function closeAllMenus() {
+    closeNewMenu();
+    closeExportMenu();
+  }
+
+  if (btnNew && newMenu) {
+    btnNew.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = !newMenu.classList.contains('hidden');
+      closeAllMenus();
+      if (!open) newMenu.classList.remove('hidden');
     });
-  });
+  }
+  if (btnNewEmpty) {
+    btnNewEmpty.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeAllMenus();
+      showModal('New Graph', 'e.g. customers, schema, ...', (name) => {
+        if (name) createGraph(name);
+      });
+    });
+  }
+  if (btnUploadJson) {
+    btnUploadJson.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeAllMenus();
+      if (jsonFileInput) jsonFileInput.click();
+    });
+  }
 
   btnSave.addEventListener('click', saveGraph);
   btnDeleteGraph.addEventListener('click', deleteGraph);
   btnAddNode.addEventListener('click', addNode);
-  function closeExportMenu() {
-    if (exportMenu) exportMenu.classList.add('hidden');
-  }
+
   if (btnExport && exportMenu) {
     btnExport.addEventListener('click', (e) => {
       e.stopPropagation();
-      exportMenu.classList.toggle('hidden');
-    });
-    document.addEventListener('click', (e) => {
-      if (!exportMenu.classList.contains('hidden')) {
-        if (!exportMenu.contains(e.target) && e.target !== btnExport) closeExportMenu();
-      }
+      const open = !exportMenu.classList.contains('hidden');
+      closeAllMenus();
+      if (!open) exportMenu.classList.remove('hidden');
     });
   }
+  document.addEventListener('click', (e) => {
+    if (newMenu && !newMenu.classList.contains('hidden')) {
+      if (!newMenu.contains(e.target) && e.target !== btnNew) closeNewMenu();
+    }
+    if (exportMenu && !exportMenu.classList.contains('hidden')) {
+      if (!exportMenu.contains(e.target) && e.target !== btnExport) closeExportMenu();
+    }
+  });
   if (btnExportPng) btnExportPng.addEventListener('click', (e) => {
     e.stopPropagation();
-    closeExportMenu();
+    closeAllMenus();
     exportGraphPng();
   });
   if (btnExportMhtml) btnExportMhtml.addEventListener('click', (e) => {
     e.stopPropagation();
-    closeExportMenu();
+    closeAllMenus();
     exportReadonlyMhtml();
   });
-  if (btnDownloadJson) btnDownloadJson.addEventListener('click', downloadGraphJson);
-  if (btnUploadJson) btnUploadJson.addEventListener('click', () => {
-    if (jsonFileInput) jsonFileInput.click();
+  if (btnDownloadJson) btnDownloadJson.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllMenus();
+    downloadGraphJson();
   });
   if (jsonFileInput) jsonFileInput.addEventListener('change', uploadGraphJson);
 
@@ -2735,6 +2771,13 @@
 
     const graphJson = JSON.stringify(graphData);
     const safeName = String(graphData.name || 'graph').replace(/[<>&"]/g, '');
+    const exportStamp = (function () {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      // Local time: YYYY-MM-DD HH:MM
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+        ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    })();
 
     // Viewer script as a separate string — no nested template hell
     const viewerJs = `
@@ -3312,6 +3355,7 @@ html, body { margin:0; height:100%; font-family: Segoe UI, system-ui, sans-serif
 .toolbar { min-height:44px; display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--border); flex-shrink:0; flex-wrap:wrap; }
 .brand { font-weight:700; color:var(--accent); }
 .badge { font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; padding:2px 8px; border-radius:999px; background:rgba(59,130,246,0.15); color:#93c5fd; }
+.export-version { font-size:0.75rem; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .hint { color:var(--muted); font-size:0.8rem; margin-left:auto; }
 .workspace { display:flex; height:calc(100% - 44px); min-height:0; flex:1; }
 .graph-pane { flex:1; min-width:0; min-height:0; position:relative; overflow:hidden; background:var(--bg); touch-action:none; }
@@ -3415,6 +3459,7 @@ body.props-open .props-toggle { display:none; }
       '<div class="brand">GraphDB</div>',
       '<span class="badge">Read-only</span>',
       '<strong>' + safeName + '</strong>',
+      '<span class="export-version" title="Export version (date/time)">as of ' + exportStamp + '</span>',
       '<div class="search-wrap">',
       '<input type="search" id="searchInput" placeholder="Search nodes & groups…" autocomplete="off" />',
       '<div id="searchResults" class="search-results hidden"></div>',

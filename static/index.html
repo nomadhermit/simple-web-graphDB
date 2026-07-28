@@ -15,6 +15,7 @@
       <button id="btnNew" title="Create new graph">New</button>
       <button id="btnSave" title="Save current graph">Save</button>
       <button id="btnExportPng" title="Export graph view as PNG">Export PNG</button>
+      <button id="btnExportMhtml" title="Export read-only interactive HTML viewer (open the .html file in Chrome)">Export HTML</button>
       <button id="btnReport" title="Query and report on objects/attributes">Report</button>
       <button id="btnDownloadJson" title="Download graph as JSON file">Download JSON</button>
       <button id="btnUploadJson" title="Upload graph from JSON file">Upload JSON</button>
@@ -51,7 +52,8 @@
       <div class="zoom-controls" id="zoomControls">
         <button type="button" id="btnZoomIn" title="Zoom in">+</button>
         <button type="button" id="btnZoomOut" title="Zoom out">−</button>
-        <button type="button" id="btnZoomReset" title="Reset zoom">100%</button>
+        <button type="button" id="btnZoomFit" title="Fit graph to view">Fit</button>
+        <button type="button" id="btnZoomReset" title="Reset zoom to 100%">100%</button>
         <span id="zoomLabel">100%</span>
         <label class="snap-toggle" title="Snap nodes to grid while moving">
           <input type="checkbox" id="chkSnapGrid" />
@@ -91,7 +93,10 @@
     <div class="modal-content report-modal" id="reportPanel">
       <div class="report-header">
         <h3>Report</h3>
-        <button type="button" id="reportClose" class="btn-icon" title="Close">×</button>
+        <div class="report-header-actions">
+          <button type="button" id="reportHelp" title="Regex syntax help">Help</button>
+          <button type="button" id="reportClose" class="btn-icon" title="Close">×</button>
+        </div>
       </div>
       <div class="report-filters">
         <div class="report-filter-row">
@@ -104,8 +109,13 @@
           </select>
         </div>
         <div class="report-filter-row">
-          <label>Label contains</label>
-          <input type="text" id="reportLabel" placeholder="optional" />
+          <label>Label</label>
+          <input type="text" id="reportLabel" placeholder="optional text or regex" />
+          <select id="reportLabelMatch" title="Label match mode">
+            <option value="contains">contains</option>
+            <option value="equals">equals</option>
+            <option value="regex">regex</option>
+          </select>
         </div>
         <div class="report-filter-row">
           <label>Attribute key</label>
@@ -117,8 +127,12 @@
           <input type="text" id="reportAttrVal" placeholder="optional" />
           <select id="reportAttrMatch">
             <option value="contains">contains</option>
+            <option value="not_contains">does not contain</option>
             <option value="equals">equals</option>
+            <option value="not_equals">not equal to</option>
             <option value="exists">key exists</option>
+            <option value="not_exists">key does not exist</option>
+            <option value="regex">regex</option>
           </select>
         </div>
         <div class="report-filter-row report-filter-actions">
@@ -149,6 +163,45 @@
             <tr><td colspan="6" class="report-empty">Run a query to see results</td></tr>
           </tbody>
         </table>
+      </div>
+      <div id="reportHelpPanel" class="report-help-panel hidden">
+        <div class="report-help-inner">
+          <div class="report-help-top">
+            <h4>Regex filter help</h4>
+            <button type="button" id="reportHelpClose" class="btn-icon" title="Close help">×</button>
+          </div>
+          <div class="report-help-body">
+            <p>Use <strong>regex</strong> on the Label or Attribute value filters.</p>
+            <h5>Syntax</h5>
+            <ul>
+              <li><code>pattern</code> — compiled as <code>/pattern/i</code> (case-insensitive by default)</li>
+              <li><code>/pattern/flags</code> — explicit form; flags: <code>i</code> ignore case, <code>m</code> multiline, <code>s</code> dotall, <code>u</code> unicode, <code>g</code> ignored for test</li>
+            </ul>
+            <h5>Common tokens</h5>
+            <table class="report-help-table">
+              <tr><td><code>.</code></td><td>any character except newline</td></tr>
+              <tr><td><code>\d</code> <code>\w</code> <code>\s</code></td><td>digit, word char, whitespace</td></tr>
+              <tr><td><code>\D</code> <code>\W</code> <code>\S</code></td><td>not digit / word / space</td></tr>
+              <tr><td><code>^</code> <code>$</code></td><td>start / end of string</td></tr>
+              <tr><td><code>*</code> <code>+</code> <code>?</code></td><td>0+, 1+, 0 or 1</td></tr>
+              <tr><td><code>{n}</code> <code>{n,m}</code></td><td>exactly n, or n to m</td></tr>
+              <tr><td><code>[abc]</code> <code>[^abc]</code></td><td>char class / negated</td></tr>
+              <tr><td><code>(a|b)</code></td><td>alternation (group)</td></tr>
+              <tr><td><code>\.</code></td><td>literal dot (escape special chars)</td></tr>
+            </table>
+            <h5>Examples</h5>
+            <table class="report-help-table">
+              <tr><td><code>^Order</code></td><td>label/value starts with “Order”</td></tr>
+              <tr><td><code>item$</code></td><td>ends with “item”</td></tr>
+              <tr><td><code>open|closed</code></td><td>contains “open” or “closed”</td></tr>
+              <tr><td><code>^\d{3}$</code></td><td>exactly 3 digits</td></tr>
+              <tr><td><code>/[A-Z]{2,}/</code></td><td>2+ uppercase letters (case-sensitive)</td></tr>
+              <tr><td><code>/status$/i</code></td><td>ends with “status”, ignore case</td></tr>
+              <tr><td><code>^(?!draft).*</code></td><td>does not start with “draft”</td></tr>
+            </table>
+            <p class="report-help-note">Invalid patterns show an error and the query does not run. Attribute modes <em>key exists</em> / <em>key does not exist</em> ignore the value field.</p>
+          </div>
+        </div>
       </div>
       <div class="report-resize-e" id="reportResizeE" title="Drag to resize width"></div>
       <div class="report-resize-s" id="reportResizeS" title="Drag to resize height"></div>

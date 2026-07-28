@@ -884,3 +884,88 @@ body.linking .group-shape {
 .report-table.show-members .report-col-members {
   display: table-cell;
 }
+
+.report-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.report-help-panel {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.report-help-panel.hidden {
+  display: none;
+}
+.report-help-inner {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: min(560px, 100%);
+  max-height: 85%;
+  overflow: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+.report-help-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+.report-help-top h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+.report-help-body {
+  padding: 12px 16px 16px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+.report-help-body h5 {
+  margin: 14px 0 6px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.report-help-body ul {
+  margin: 0 0 8px 1.1rem;
+  padding: 0;
+}
+.report-help-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.report-help-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.report-help-table td {
+  padding: 4px 8px 4px 0;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.report-help-table td:first-child {
+  white-space: nowrap;
+  width: 1%;
+}
+.report-help-note {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}

@@ -27,6 +27,7 @@
   const btnNew = document.getElementById('btnNew');
   const btnSave = document.getElementById('btnSave');
   const btnExportPng = document.getElementById('btnExportPng');
+  const btnExportMhtml = document.getElementById('btnExportMhtml');
   const btnReport = document.getElementById('btnReport');
   const btnDownloadJson = document.getElementById('btnDownloadJson');
   const btnUploadJson = document.getElementById('btnUploadJson');
@@ -44,6 +45,7 @@
   const btnZoomIn = document.getElementById('btnZoomIn');
   const btnZoomOut = document.getElementById('btnZoomOut');
   const btnZoomReset = document.getElementById('btnZoomReset');
+  const btnZoomFit = document.getElementById('btnZoomFit');
   const zoomLabel = document.getElementById('zoomLabel');
   const chkSnapGrid = document.getElementById('chkSnapGrid');
   const btnSnapAll = document.getElementById('btnSnapAll');
@@ -246,6 +248,57 @@
     viewY = cy - wy * viewScale;
     applyViewport();
   }
+
+  function contentBounds() {
+    if (!currentGraph) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let has = false;
+    for (const node of Object.values(currentGraph.nodes || {})) {
+      has = true;
+      const h = nodeHeight(node);
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + NODE_W);
+      maxY = Math.max(maxY, node.position.y + h);
+    }
+    for (const grp of Object.values(currentGraph.groups || {})) {
+      const b = groupBounds(grp);
+      if (!b) continue;
+      has = true;
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.w);
+      maxY = Math.max(maxY, b.y + b.h);
+    }
+    if (!has) return null;
+    const pad = 40;
+    return {
+      minX: minX - pad,
+      minY: minY - pad,
+      w: Math.max(50, (maxX - minX) + pad * 2),
+      h: Math.max(50, (maxY - minY) + pad * 2)
+    };
+  }
+
+  function fitToView() {
+    if (!graphSvg) return;
+    const bounds = contentBounds();
+    const rect = graphSvg.getBoundingClientRect();
+    if (!bounds || !rect.width || !rect.height) {
+      viewScale = 1;
+      viewX = 0;
+      viewY = 0;
+      applyViewport();
+      return;
+    }
+    const sx = rect.width / bounds.w;
+    const sy = rect.height / bounds.h;
+    viewScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(sx, sy) * 0.92));
+    viewX = (rect.width - bounds.w * viewScale) / 2 - bounds.minX * viewScale;
+    viewY = (rect.height - bounds.h * viewScale) / 2 - bounds.minY * viewScale;
+    applyViewport();
+  }
+
 
   function screenToWorld(clientX, clientY) {
     const svgRect = graphSvg.getBoundingClientRect();
@@ -1356,6 +1409,19 @@
         if (edge.from !== node.id && edge.to !== node.id) continue;
         const otherId = edge.from === node.id ? edge.to : edge.from;
         const dir = edge.from === node.id ? '→' : '←';
+        const otherGroup = currentGraph.groups[otherId];
+        let membersHtml = '';
+        if (otherGroup) {
+          const memberLabels = [];
+          for (const nid of otherGroup.nodeIds || []) {
+            const n = currentGraph.nodes[nid];
+            memberLabels.push(n ? (n.label || nid) : nid);
+          }
+          const membersText = memberLabels.length
+            ? memberLabels.join(', ')
+            : 'no members';
+          membersHtml = `<div class="rel-members" style="color:var(--muted);font-size:0.78rem;margin-top:3px;padding-left:18px">members: ${escapeHtml(membersText)}</div>`;
+        }
         const item = document.createElement('div');
         item.className = 'rel-item';
         item.innerHTML = `
@@ -1366,6 +1432,7 @@
             <span>${escapeHtml(endpointLabel(otherId))}</span>
             <button class="btn-icon" data-edge="${edge.id}" style="margin-left:auto">×</button>
           </div>
+          ${membersHtml}
         `;
         item.addEventListener('click', (e) => {
           if (e.target.classList.contains('btn-icon')) return;
@@ -2019,6 +2086,7 @@
   btnDeleteGraph.addEventListener('click', deleteGraph);
   btnAddNode.addEventListener('click', addNode);
   if (btnExportPng) btnExportPng.addEventListener('click', exportGraphPng);
+  if (btnExportMhtml) btnExportMhtml.addEventListener('click', exportReadonlyMhtml);
   if (btnDownloadJson) btnDownloadJson.addEventListener('click', downloadGraphJson);
   if (btnUploadJson) btnUploadJson.addEventListener('click', () => {
     if (jsonFileInput) jsonFileInput.click();
@@ -2469,6 +2537,891 @@
     }
   }
 
+
+
+  function exportReadonlyMhtml() {
+    if (!currentGraph) {
+      alert('No graph loaded');
+      return;
+    }
+
+    const graphData = {
+      name: currentGraph.name || 'graph',
+      nodes: JSON.parse(JSON.stringify(currentGraph.nodes || {})),
+      edges: JSON.parse(JSON.stringify(currentGraph.edges || {})),
+      groups: JSON.parse(JSON.stringify(currentGraph.groups || {}))
+    };
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let hasContent = false;
+    for (const node of Object.values(currentGraph.nodes || {})) {
+      hasContent = true;
+      const h = nodeHeight(node);
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + NODE_W);
+      maxY = Math.max(maxY, node.position.y + h);
+    }
+    for (const grp of Object.values(currentGraph.groups || {})) {
+      const b = groupBounds(grp);
+      if (!b) continue;
+      hasContent = true;
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.w);
+      maxY = Math.max(maxY, b.y + b.h);
+    }
+    if (!hasContent) {
+      alert('Graph is empty');
+      return;
+    }
+    const pad = 48;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    const contentW = Math.max(100, maxX - minX);
+    const contentH = Math.max(100, maxY - minY);
+
+    // Fresh render into an off-DOM SVG so export is self-contained and clean
+    const clone = graphSvg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('id', 'viewerSvg');
+    clone.setAttribute('width', '100%');
+    clone.setAttribute('height', '100%');
+    clone.style.cssText = 'width:100%;height:100%;display:block;background:#0b1220;';
+
+    clone.querySelectorAll('.node-group').forEach(el => {
+      el.setAttribute('data-type', 'node');
+      el.classList.remove('selected', 'link-source', 'dragging');
+      el.style.cursor = 'pointer';
+      el.style.pointerEvents = 'all';
+    });
+    clone.querySelectorAll('.group-shape').forEach(el => {
+      el.setAttribute('data-type', 'group');
+      el.classList.remove('link-source');
+      el.style.cursor = 'pointer';
+      el.style.pointerEvents = 'all';
+      const box = el.querySelector('.group-box');
+      if (box) box.classList.remove('selected', 'link-source');
+    });
+    clone.querySelectorAll('.edge-path, .edge-hit').forEach(el => {
+      if (el.getAttribute('data-id')) el.setAttribute('data-type', 'edge');
+      el.style.cursor = 'pointer';
+    });
+    const edgesLayerClone = clone.querySelector('#edgesLayer');
+    if (edgesLayerClone) {
+      let lastEdgeId = null;
+      Array.from(edgesLayerClone.children).forEach(child => {
+        if (child.classList && (child.classList.contains('edge-path') || child.classList.contains('edge-hit'))) {
+          lastEdgeId = child.getAttribute('data-id') || lastEdgeId;
+        } else if (lastEdgeId) {
+          child.setAttribute('data-id', lastEdgeId);
+          child.setAttribute('data-type', 'edge');
+        }
+      });
+    }
+    const vp = clone.querySelector('#viewport');
+    if (vp) {
+      vp.setAttribute('id', 'viewerViewport');
+      vp.removeAttribute('transform');
+    }
+    clone.querySelectorAll('.edge-hit').forEach(el => {
+      el.setAttribute('stroke', 'transparent');
+      el.setAttribute('stroke-width', '14');
+      el.style.pointerEvents = 'stroke';
+    });
+
+    // Bake colors (no CSS variables)
+    const fillMap = {
+      'node-rect': '#1e293b',
+      'node-header': '#334155',
+      'edge-label-bg': '#0b1220',
+      'group-label-bg': '#0b1220',
+      'fork-junction': '#64748b',
+      'node-title': '#e2e8f0',
+      'node-attr': '#94a3b8',
+      'group-label': '#93c5fd',
+      'group-attr': '#94a3b8',
+      'edge-label': '#94a3b8'
+    };
+    clone.querySelectorAll('*').forEach(el => {
+      const cls = (el.getAttribute('class') || '').split(/\s+/);
+      for (const c of cls) {
+        if (fillMap[c]) el.setAttribute('fill', fillMap[c]);
+      }
+      const f = el.getAttribute('fill') || '';
+      if (f.startsWith('var(')) {
+        if (cls.includes('node-header') || el.getAttribute('height') === '8') el.setAttribute('fill', '#334155');
+        else if (el.tagName && el.tagName.toLowerCase() === 'text') el.setAttribute('fill', '#e2e8f0');
+        else el.setAttribute('fill', '#1e293b');
+      }
+      const s = el.getAttribute('stroke') || '';
+      if (s.startsWith('var(')) el.setAttribute('stroke', '#475569');
+    });
+    // headerFix rects without class
+    clone.querySelectorAll('.node-group rect').forEach(el => {
+      if (!el.getAttribute('class') && el.getAttribute('height') === '8') {
+        el.setAttribute('fill', '#334155');
+      }
+    });
+
+    // Red selection marker for relationships
+    const selMarker = clone.querySelector('#arrowhead-selected polygon');
+    if (selMarker) selMarker.setAttribute('fill', '#ef4444');
+    const selMarkerPath = clone.querySelector('#arrowhead-selected path');
+    if (selMarkerPath) selMarkerPath.setAttribute('fill', '#ef4444');
+
+    const svgStyle = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    svgStyle.textContent = [
+      '.node-rect{fill:#1e293b;stroke:#475569;stroke-width:1.5;rx:6}',
+      '.node-header{fill:#334155}',
+      '.node-title{fill:#e2e8f0;font-size:13px;font-weight:600;font-family:Segoe UI,system-ui,sans-serif}',
+      '.node-attr{fill:#94a3b8;font-size:11px;font-family:Segoe UI,system-ui,sans-serif}',
+      '.node-group{cursor:pointer}.node-group.selected .node-rect{stroke:#ef4444;stroke-width:3;filter:drop-shadow(0 0 6px rgba(239,68,68,0.7))}',
+      '.edge-path{fill:none;stroke:#64748b;stroke-width:1.5;marker-end:url(#arrowhead);cursor:pointer}',
+      '.edge-path.selected{stroke:#ef4444;stroke-width:3;marker-end:url(#arrowhead-selected);filter:drop-shadow(0 0 4px rgba(239,68,68,0.6))}',
+      '.edge-path-stem{fill:none;stroke:#64748b;stroke-width:1.5}',
+      '.edge-label{fill:#94a3b8;font-size:11px;font-family:Segoe UI,system-ui,sans-serif;cursor:pointer}',
+      '.edge-label-bg{fill:#0b1220}',
+      '.edge-hit{fill:none;stroke:transparent;cursor:pointer}',
+      '.fork-junction{fill:#64748b}',
+      '.group-box{fill:rgba(59,130,246,0.08);stroke:#3b82f6;stroke-width:1.5;stroke-dasharray:6 4;rx:10;cursor:pointer}',
+      '.group-box.selected{fill:rgba(239,68,68,0.12);stroke:#ef4444;stroke-width:3;stroke-dasharray:none;filter:drop-shadow(0 0 6px rgba(239,68,68,0.55))}',
+      '.group-box-parent{fill:rgba(245,158,11,0.10);stroke:#f59e0b;stroke-width:2.5;stroke-dasharray:10 5;rx:14}',
+      '.group-box-child{fill:rgba(16,185,129,0.12);stroke:#10b981;stroke-width:1.75;stroke-dasharray:4 3;rx:8}',
+      '.group-label{fill:#93c5fd;font-size:12px;font-weight:600;font-family:Segoe UI,system-ui,sans-serif;pointer-events:none}',
+      '.group-attr{fill:#94a3b8;font-size:10px;font-family:Segoe UI,system-ui,sans-serif;pointer-events:none}',
+      '.group-label-bg{fill:#0b1220;opacity:0.85;pointer-events:none}',
+      '.group-shape{cursor:pointer}'
+    ].join('\n');
+    clone.insertBefore(svgStyle, clone.firstChild);
+
+    let svgMarkup = new XMLSerializer().serializeToString(clone);
+    // Prevent accidental script breakouts
+    svgMarkup = svgMarkup.replace(/<\/script/gi, '<\\/script');
+
+    const graphJson = JSON.stringify(graphData);
+    const safeName = String(graphData.name || 'graph').replace(/[<>&"]/g, '');
+
+    // Viewer script as a separate string — no nested template hell
+    const viewerJs = `
+(function(){
+  var GRAPH = null;
+  try {
+    GRAPH = JSON.parse(document.getElementById('graph-data').textContent);
+  } catch (err) {
+    document.body.innerHTML = '<pre style="color:red;padding:20px">Failed to parse graph data: ' + err + '</pre>';
+    return;
+  }
+  var CONTENT = { minX: ${minX}, minY: ${minY}, w: ${contentW}, h: ${contentH} };
+  var svg = document.getElementById('viewerSvg');
+  var viewport = document.getElementById('viewerViewport') || (svg && svg.querySelector('g'));
+  var propsContent = document.getElementById('propsContent');
+  var graphPane = document.getElementById('graphPane');
+  var propsPane = document.getElementById('propsPane');
+  var viewScale = 1, viewX = 0, viewY = 0, panState = null;
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function applyViewport() {
+    if (viewport) viewport.setAttribute('transform', 'translate(' + viewX + ',' + viewY + ') scale(' + viewScale + ')');
+    var zl = document.getElementById('zoomLabel');
+    if (zl) zl.textContent = Math.round(viewScale * 100) + '%';
+  }
+  function fitView() {
+    if (!svg) return;
+    var rect = svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    var sx = rect.width / CONTENT.w;
+    var sy = rect.height / CONTENT.h;
+    viewScale = Math.max(0.1, Math.min(2.5, Math.min(sx, sy) * 0.9));
+    viewX = (rect.width - CONTENT.w * viewScale) / 2 - CONTENT.minX * viewScale;
+    viewY = (rect.height - CONTENT.h * viewScale) / 2 - CONTENT.minY * viewScale;
+    applyViewport();
+  }
+  function setZoom(factor, cx, cy) {
+    if (!svg) return;
+    var rect = svg.getBoundingClientRect();
+    var px = cx != null ? cx - rect.left : rect.width / 2;
+    var py = cy != null ? cy - rect.top : rect.height / 2;
+    var wx = (px - viewX) / viewScale;
+    var wy = (py - viewY) / viewScale;
+    viewScale = Math.max(0.1, Math.min(4, viewScale * factor));
+    viewX = px - wx * viewScale;
+    viewY = py - wy * viewScale;
+    applyViewport();
+  }
+  function clearSel() {
+    if (!svg) return;
+    svg.querySelectorAll('.node-group.selected').forEach(function(el){ el.classList.remove('selected'); });
+    svg.querySelectorAll('.group-box.selected').forEach(function(el){ el.classList.remove('selected'); });
+    svg.querySelectorAll('.edge-path.selected').forEach(function(el){ el.classList.remove('selected'); });
+  }
+  function endpointLabel(id) {
+    var n = GRAPH.nodes[id];
+    if (n) return n.label || id;
+    var g = GRAPH.groups[id];
+    if (g) return (g.label || 'Group') + ' (group)';
+    return id;
+  }
+  function orderedKeys(obj) {
+    if (!obj) return [];
+    var attrs = obj.attributes || {};
+    if (Array.isArray(obj.attributeOrder) && obj.attributeOrder.length) {
+      var seen = {}, out = [];
+      obj.attributeOrder.forEach(function(k) {
+        if (Object.prototype.hasOwnProperty.call(attrs, k) && !seen[k]) { out.push(k); seen[k] = 1; }
+      });
+      Object.keys(attrs).forEach(function(k) { if (!seen[k]) out.push(k); });
+      return out;
+    }
+    return Object.keys(attrs);
+  }
+  function attrsHtml(obj) {
+    var keys = orderedKeys(obj);
+    if (!keys.length) return '<div style="color:#94a3b8;font-size:0.85rem">No attributes</div>';
+    return '<div class="attr-list">' + keys.map(function(k) {
+      return '<div class="attr-row"><span class="attr-key">' + esc(k) + '</span><span class="attr-val">' + esc(obj.attributes[k]) + '</span></div>';
+    }).join('') + '</div>';
+  }
+  function showProps(type, id) {
+    clearSel();
+    if (!propsContent) return;
+    if (type === 'node') {
+      var el = svg.querySelector('.node-group[data-id="' + id.replace(/"/g, '') + '"]');
+      if (el) el.classList.add('selected');
+      var node = GRAPH.nodes[id];
+      if (!node) return;
+      var relHtml = '';
+      Object.keys(GRAPH.edges || {}).forEach(function(eid) {
+        var edge = GRAPH.edges[eid];
+        if (edge.from !== id && edge.to !== id) return;
+        var other = edge.from === id ? edge.to : edge.from;
+        var dir = edge.from === id ? '\\u2192' : '\\u2190';
+        var grp = GRAPH.groups[other];
+        var members = '';
+        if (grp) {
+          var labels = (grp.nodeIds || []).map(function(nid) {
+            var n = GRAPH.nodes[nid];
+            return n ? (n.label || nid) : nid;
+          });
+          members = '<div style="color:#94a3b8;font-size:0.78rem;margin-top:3px;padding-left:12px">members: ' + esc(labels.join(', ') || 'none') + '</div>';
+        }
+        relHtml += '<div class="rel-item"><span class="rel-dir">' + dir + '</span><strong>' + esc(edge.label) + '</strong> to ' + esc(endpointLabel(other)) + members + '</div>';
+      });
+      if (!relHtml) relHtml = '<div style="color:#94a3b8;font-size:0.85rem">No relationships</div>';
+      propsContent.className = '';
+      propsContent.innerHTML =
+        '<div class="props-section"><h3>Node</h3>' +
+        '<div class="props-row"><span class="props-label">Label</span><div class="props-value">' + esc(node.label) + '</div></div>' +
+        '<div class="props-row"><span class="props-label">Note</span><div class="props-value note">' + esc(node.note || '') + '</div></div>' +
+        '</div><div class="props-section"><h3>Attributes</h3>' + attrsHtml(node) + '</div>' +
+        '<div class="props-section"><h3>Relationships</h3>' + relHtml + '</div>';
+    } else if (type === 'edge') {
+      svg.querySelectorAll('.edge-path[data-id="' + id.replace(/"/g, '') + '"]').forEach(function(el){ el.classList.add('selected'); });
+      var edge = GRAPH.edges[id];
+      if (!edge) return;
+      propsContent.className = '';
+      propsContent.innerHTML =
+        '<div class="props-section"><h3>Relationship</h3>' +
+        '<div class="props-row"><span class="props-label">Type</span><div class="props-value">' + esc(edge.label) + '</div></div>' +
+        '<div class="props-row"><span class="props-label">From</span><div class="props-value">' + esc(endpointLabel(edge.from)) + '</div></div>' +
+        '<div class="props-row"><span class="props-label">To</span><div class="props-value">' + esc(endpointLabel(edge.to)) + '</div></div>' +
+        '<div class="props-row"><span class="props-label">Note</span><div class="props-value note">' + esc(edge.note || '') + '</div></div>' +
+        '</div><div class="props-section"><h3>Attributes</h3>' + attrsHtml(edge) + '</div>';
+    } else if (type === 'group') {
+      var shape = svg.querySelector('.group-shape[data-id="' + id.replace(/"/g, '') + '"]');
+      if (shape) {
+        var box = shape.querySelector('.group-box');
+        if (box) box.classList.add('selected');
+      }
+      var grp = GRAPH.groups[id];
+      if (!grp) return;
+      var members = (grp.nodeIds || []).map(function(nid) {
+        var n = GRAPH.nodes[nid];
+        return '<div class="attr-row"><span class="attr-val">' + esc(n ? (n.label || nid) : nid) + '</span></div>';
+      }).join('') || '<div style="color:#94a3b8;font-size:0.85rem">No members</div>';
+      var relHtml = '';
+      Object.keys(GRAPH.edges || {}).forEach(function(eid) {
+        var edge = GRAPH.edges[eid];
+        if (edge.from !== id && edge.to !== id) return;
+        var other = edge.from === id ? edge.to : edge.from;
+        var dir = edge.from === id ? '\\u2192' : '\\u2190';
+        relHtml += '<div class="rel-item"><span class="rel-dir">' + dir + '</span><strong>' + esc(edge.label) + '</strong> to ' + esc(endpointLabel(other)) + '</div>';
+      });
+      if (!relHtml) relHtml = '<div style="color:#94a3b8;font-size:0.85rem">No relationships</div>';
+      propsContent.className = '';
+      propsContent.innerHTML =
+        '<div class="props-section"><h3>Group</h3>' +
+        '<div class="props-row"><span class="props-label">Label</span><div class="props-value">' + esc(grp.label) + '</div></div>' +
+        '<div class="props-row"><span class="props-label">Note</span><div class="props-value note">' + esc(grp.note || '') + '</div></div>' +
+        '</div><div class="props-section"><h3>Attributes</h3>' + attrsHtml(grp) + '</div>' +
+        '<div class="props-section"><h3>Members</h3><div class="attr-list">' + members + '</div></div>' +
+        '<div class="props-section"><h3>Relationships</h3>' + relHtml + '</div>';
+    }
+  }
+
+
+  function closestEl(el, selector) {
+    while (el && el.nodeType === 1) {
+      try {
+        if (el.matches && el.matches(selector)) return el;
+      } catch (err) {}
+      el = el.parentElement || el.parentNode;
+      if (el && el.nodeType !== 1) break;
+    }
+    return null;
+  }
+
+  function selectAtPoint(clientX, clientY) {
+    var el = document.elementFromPoint(clientX, clientY);
+    if (!el) return false;
+    var nodeEl = closestEl(el, '.node-group');
+    if (nodeEl && nodeEl.getAttribute('data-id')) {
+      showProps('node', nodeEl.getAttribute('data-id'));
+      return true;
+    }
+    var groupEl = closestEl(el, '.group-shape');
+    if (groupEl && groupEl.getAttribute('data-id')) {
+      showProps('group', groupEl.getAttribute('data-id'));
+      return true;
+    }
+    var edgeEl = closestEl(el, '.edge-path, .edge-hit, .edge-label, .edge-label-bg, [data-type="edge"]');
+    if (edgeEl) {
+      var id = edgeEl.getAttribute('data-id');
+      if (!id) {
+        var p = closestEl(edgeEl, '[data-id]');
+        if (p) id = p.getAttribute('data-id');
+      }
+      if (id && GRAPH.edges && GRAPH.edges[id]) {
+        showProps('edge', id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function onSvgClick(e) {
+    var t = e.target;
+    if (!t) return;
+    var nodeEl = closestEl(t, '.node-group');
+    if (nodeEl && nodeEl.getAttribute('data-id')) {
+      e.preventDefault(); e.stopPropagation();
+      showProps('node', nodeEl.getAttribute('data-id'));
+      return;
+    }
+    var groupEl = closestEl(t, '.group-shape');
+    if (groupEl && groupEl.getAttribute('data-id')) {
+      e.preventDefault(); e.stopPropagation();
+      showProps('group', groupEl.getAttribute('data-id'));
+      return;
+    }
+    var edgeEl = closestEl(t, '.edge-path, .edge-hit, .edge-label, .edge-label-bg, [data-type="edge"]');
+    if (edgeEl) {
+      var id = edgeEl.getAttribute('data-id');
+      if (!id) {
+        var p = closestEl(edgeEl, '[data-id]');
+        if (p) id = p.getAttribute('data-id');
+      }
+      if (id && GRAPH.edges && GRAPH.edges[id]) {
+        e.preventDefault(); e.stopPropagation();
+        showProps('edge', id);
+        return;
+      }
+    }
+    if (t === svg || (t.id === 'viewerViewport') || (t.tagName && String(t.tagName).toLowerCase() === 'svg')) {
+      clearSel();
+      if (propsContent) {
+        propsContent.className = 'props-empty';
+        propsContent.textContent = 'Select a node, relationship, or group';
+      }
+      document.body.classList.remove('props-open');
+    }
+  }
+
+  if (svg) {
+    svg.addEventListener('click', onSvgClick, true);
+    // Mouse pan
+    svg.addEventListener('mousedown', function(e) {
+      if (e.button !== 0) return;
+      if (closestEl(e.target, '.node-group, .group-shape, .edge-path, .edge-hit, .edge-label, [data-type="edge"]')) return;
+      panState = { x: e.clientX, y: e.clientY, vx: viewX, vy: viewY };
+      if (graphPane) graphPane.classList.add('panning');
+    });
+    svg.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      setZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+    }, { passive: false });
+  }
+  window.addEventListener('mousemove', function(e) {
+    if (!panState) return;
+    viewX = panState.vx + (e.clientX - panState.x);
+    viewY = panState.vy + (e.clientY - panState.y);
+    applyViewport();
+  });
+  window.addEventListener('mouseup', function() {
+    panState = null;
+    if (graphPane) graphPane.classList.remove('panning');
+  });
+
+  var zi = document.getElementById('btnZoomIn');
+  var zo = document.getElementById('btnZoomOut');
+  var zr = document.getElementById('btnZoomReset');
+  if (zi) zi.onclick = function() { setZoom(1.2); };
+  if (zo) zo.onclick = function() { setZoom(1 / 1.2); };
+  if (zr) zr.onclick = function() { fitView(); };
+
+  var rs = null;
+  var resizer = document.getElementById('paneResizer');
+  if (resizer && propsPane) {
+    resizer.addEventListener('mousedown', function(e) {
+      rs = { x: e.clientX, w: propsPane.getBoundingClientRect().width };
+      resizer.classList.add('active');
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', function(e) {
+      if (!rs) return;
+      var nw = Math.min(window.innerWidth * 0.5, Math.max(200, rs.w + (rs.x - e.clientX)));
+      propsPane.style.width = nw + 'px';
+    });
+    window.addEventListener('mouseup', function() {
+      rs = null;
+      resizer.classList.remove('active');
+    });
+  }
+  window.addEventListener('resize', fitView);
+
+  // Mobile: show properties pane when something is selected
+  var originalShowProps = showProps;
+  showProps = function(type, id) {
+    originalShowProps(type, id);
+    document.body.classList.add('props-open');
+  };
+  var btnOpenProps = document.getElementById('btnOpenProps');
+  var btnCloseProps = document.getElementById('btnCloseProps');
+  if (btnOpenProps) btnOpenProps.addEventListener('click', function() {
+    document.body.classList.add('props-open');
+  });
+  if (btnCloseProps) btnCloseProps.addEventListener('click', function() {
+    document.body.classList.remove('props-open');
+  });
+
+  // iOS-friendly touch: pan, pinch, and explicit tap selection
+  var touchState = null;
+  function touchDist(a, b) {
+    var dx = a.clientX - b.clientX, dy = a.clientY - b.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function touchMid(a, b) {
+    return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+  }
+  var touchTarget = graphPane || svg;
+  if (touchTarget) {
+    touchTarget.addEventListener('touchstart', function(e) {
+      if (!e.touches || !e.touches.length) return;
+      if (e.touches.length >= 2) {
+        e.preventDefault();
+        var d = touchDist(e.touches[0], e.touches[1]);
+        var m = touchMid(e.touches[0], e.touches[1]);
+        touchState = { mode: 'pinch', dist: d, scale: viewScale, midX: m.x, midY: m.y, vx: viewX, vy: viewY };
+        return;
+      }
+      var t0 = e.touches[0];
+      touchState = {
+        mode: 'maybe',
+        x: t0.clientX,
+        y: t0.clientY,
+        vx: viewX,
+        vy: viewY,
+        moved: false,
+        t0: Date.now()
+      };
+    }, { passive: false });
+
+    touchTarget.addEventListener('touchmove', function(e) {
+      if (!touchState || !e.touches || !e.touches.length) return;
+      if (touchState.mode === 'pinch' || e.touches.length >= 2) {
+        e.preventDefault();
+        if (e.touches.length < 2) return;
+        if (touchState.mode !== 'pinch') {
+          var d0 = touchDist(e.touches[0], e.touches[1]);
+          var m0 = touchMid(e.touches[0], e.touches[1]);
+          touchState = { mode: 'pinch', dist: d0, scale: viewScale, midX: m0.x, midY: m0.y, vx: viewX, vy: viewY };
+        }
+        var d = touchDist(e.touches[0], e.touches[1]);
+        if (!touchState.dist) return;
+        var factor = d / touchState.dist;
+        var newScale = Math.max(0.1, Math.min(4, touchState.scale * factor));
+        if (!svg) return;
+        var rect = svg.getBoundingClientRect();
+        var px = touchState.midX - rect.left;
+        var py = touchState.midY - rect.top;
+        var wx = (px - viewX) / viewScale;
+        var wy = (py - viewY) / viewScale;
+        viewScale = newScale;
+        viewX = px - wx * viewScale;
+        viewY = py - wy * viewScale;
+        applyViewport();
+        return;
+      }
+      var t0 = e.touches[0];
+      var dx = t0.clientX - touchState.x;
+      var dy = t0.clientY - touchState.y;
+      if (!touchState.moved && (dx * dx + dy * dy) > 64) {
+        touchState.moved = true;
+        touchState.mode = 'pan';
+        if (graphPane) graphPane.classList.add('panning');
+      }
+      if (touchState.mode === 'pan' || touchState.moved) {
+        e.preventDefault();
+        viewX = touchState.vx + dx;
+        viewY = touchState.vy + dy;
+        applyViewport();
+      }
+    }, { passive: false });
+
+    touchTarget.addEventListener('touchend', function(e) {
+      if (!touchState) return;
+      var was = touchState;
+      touchState = null;
+      if (graphPane) graphPane.classList.remove('panning');
+      // Tap = select (critical on iOS where click may be suppressed)
+      if (was.mode === 'maybe' && !was.moved) {
+        var changed = false;
+        if (e.changedTouches && e.changedTouches[0]) {
+          changed = selectAtPoint(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+        }
+        if (!changed) {
+          clearSel();
+          if (propsContent) {
+            propsContent.className = 'props-empty';
+            propsContent.textContent = 'Select a node, relationship, or group';
+          }
+          document.body.classList.remove('props-open');
+        }
+      }
+    }, { passive: false });
+
+    touchTarget.addEventListener('touchcancel', function() {
+      touchState = null;
+      if (graphPane) graphPane.classList.remove('panning');
+    });
+  }
+
+  // Search (re-bind if present)
+  // (existing search handlers remain above this block if already defined)
+
+
+  function objectCenter(type, id) {
+    if (type === 'node') {
+      var node = GRAPH.nodes[id];
+      if (!node || !node.position) return null;
+      return { x: node.position.x + 80, y: node.position.y + 40 };
+    }
+    if (type === 'group') {
+      var grp = GRAPH.groups[id];
+      if (!grp) return null;
+      var ids = grp.nodeIds || [];
+      if (!ids.length) return null;
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
+      for (var i = 0; i < ids.length; i++) {
+        var node = GRAPH.nodes[ids[i]];
+        if (!node || !node.position) continue;
+        n++;
+        minX = Math.min(minX, node.position.x);
+        minY = Math.min(minY, node.position.y);
+        maxX = Math.max(maxX, node.position.x + 160);
+        maxY = Math.max(maxY, node.position.y + 80);
+      }
+      if (!n) return null;
+      return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    }
+    return null;
+  }
+
+  function centerOnObject(type, id) {
+    var c = objectCenter(type, id);
+    if (!c || !svg) return;
+    var rect = svg.getBoundingClientRect();
+    viewX = rect.width / 2 - c.x * viewScale;
+    viewY = rect.height / 2 - c.y * viewScale;
+    applyViewport();
+    showProps(type, id);
+  }
+
+  function runSearch(q) {
+    var box = document.getElementById('searchResults');
+    if (!box) return;
+    q = String(q || '').trim().toLowerCase();
+    if (!q) {
+      box.className = 'search-results hidden';
+      box.innerHTML = '';
+      return;
+    }
+    var hits = [];
+    var nid, n, g, id, label, note, attrStr, k, attrs, hay, memberStr;
+    for (nid in GRAPH.nodes) {
+      if (!Object.prototype.hasOwnProperty.call(GRAPH.nodes, nid)) continue;
+      n = GRAPH.nodes[nid];
+      label = String(n.label || '');
+      note = String(n.note || '');
+      attrStr = '';
+      attrs = n.attributes || {};
+      for (k in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, k)) attrStr += ' ' + k + ' ' + attrs[k];
+      }
+      hay = (label + ' ' + note + attrStr).toLowerCase();
+      if (hay.indexOf(q) >= 0) {
+        hits.push({ type: 'node', id: nid, label: label || nid, meta: note });
+      }
+    }
+    for (id in GRAPH.groups) {
+      if (!Object.prototype.hasOwnProperty.call(GRAPH.groups, id)) continue;
+      g = GRAPH.groups[id];
+      label = String(g.label || '');
+      note = String(g.note || '');
+      attrStr = '';
+      attrs = g.attributes || {};
+      for (k in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, k)) attrStr += ' ' + k + ' ' + attrs[k];
+      }
+      memberStr = '';
+      var mids = g.nodeIds || [];
+      for (var mi = 0; mi < mids.length; mi++) {
+        var mn = GRAPH.nodes[mids[mi]];
+        memberStr += ' ' + (mn ? (mn.label || mids[mi]) : mids[mi]);
+      }
+      hay = (label + ' ' + note + attrStr + memberStr).toLowerCase();
+      if (hay.indexOf(q) >= 0) {
+        hits.push({ type: 'group', id: id, label: label || id, meta: (mids.length) + ' members' });
+      }
+    }
+    hits.sort(function(a, b) { return (a.type + a.label).localeCompare(b.type + b.label); });
+    if (!hits.length) {
+      box.className = 'search-results';
+      box.innerHTML = '<div class="search-empty">No matches</div>';
+      return;
+    }
+    box.className = 'search-results';
+    var html = '';
+    var max = Math.min(50, hits.length);
+    for (var hi = 0; hi < max; hi++) {
+      var h = hits[hi];
+      html += '<div class="search-item" data-type="' + h.type + '" data-id="' + esc(h.id) + '">' +
+        '<span class="si-type">' + h.type + '</span>' +
+        '<span class="si-label">' + esc(h.label) + '</span>' +
+        (h.meta ? '<span class="si-meta">' + esc(h.meta) + '</span>' : '') +
+        '</div>';
+    }
+    box.innerHTML = html;
+    var items = box.querySelectorAll('.search-item');
+    for (var ii = 0; ii < items.length; ii++) {
+      (function(item) {
+        item.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var typ = item.getAttribute('data-type');
+          var id = item.getAttribute('data-id');
+          box.className = 'search-results hidden';
+          var inp = document.getElementById('searchInput');
+          if (inp) inp.blur();
+          centerOnObject(typ, id);
+        });
+      })(items[ii]);
+    }
+  }
+
+  var searchInput = document.getElementById('searchInput');
+  var searchResults = document.getElementById('searchResults');
+  var searchTimer = null;
+  if (searchInput) {
+    searchInput.addEventListener('input', function() {
+      clearTimeout(searchTimer);
+      var v = searchInput.value;
+      searchTimer = setTimeout(function() { runSearch(v); }, 120);
+    });
+    searchInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        searchInput.value = '';
+        runSearch('');
+        searchInput.blur();
+      } else if (e.key === 'Enter') {
+        var first = searchResults && searchResults.querySelector('.search-item');
+        if (first) first.click();
+      }
+    });
+  }
+  document.addEventListener('click', function(e) {
+    if (!searchResults || (searchResults.className && searchResults.className.indexOf('hidden') >= 0)) return;
+    var wrap = document.querySelector('.search-wrap');
+    if (wrap && wrap.contains(e.target)) return;
+    searchResults.className = 'search-results hidden';
+  });
+
+  setTimeout(fitView, 0);
+  setTimeout(fitView, 100);
+  setTimeout(fitView, 400);
+})();
+
+
+`;
+
+    const css = `
+:root { --bg:#0b1220; --panel:#111827; --border:#1f2937; --text:#e2e8f0; --muted:#94a3b8; --accent:#3b82f6; }
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; font-family: Segoe UI, system-ui, sans-serif; background:var(--bg); color:var(--text); -webkit-text-size-adjust:100%; }
+.toolbar { min-height:44px; display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--border); flex-shrink:0; flex-wrap:wrap; }
+.brand { font-weight:700; color:var(--accent); }
+.badge { font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; padding:2px 8px; border-radius:999px; background:rgba(59,130,246,0.15); color:#93c5fd; }
+.hint { color:var(--muted); font-size:0.8rem; margin-left:auto; }
+.workspace { display:flex; height:calc(100% - 44px); min-height:0; flex:1; }
+.graph-pane { flex:1; min-width:0; min-height:0; position:relative; overflow:hidden; background:var(--bg); touch-action:none; }
+.graph-pane svg { width:100%; height:100%; cursor:grab; touch-action:none; }
+.graph-pane.panning svg { cursor:grabbing; }
+.props-pane { width:320px; min-width:200px; max-width:50%; flex-shrink:0; border-left:1px solid var(--border); background:var(--panel); overflow:auto; padding:12px 14px; -webkit-overflow-scrolling:touch; }
+.resizer { width:5px; cursor:col-resize; background:var(--border); flex-shrink:0; touch-action:none; }
+.resizer:hover, .resizer.active { background:var(--accent); }
+.props-empty { color:var(--muted); font-size:0.9rem; padding:24px 8px; text-align:center; }
+.props-section { margin-bottom:16px; }
+.props-section h3 { margin:0 0 8px; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); }
+.props-row { display:flex; gap:8px; align-items:flex-start; margin-bottom:8px; font-size:0.85rem; }
+.props-label { width:72px; flex-shrink:0; color:var(--muted); padding-top:2px; }
+.props-value { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:5px 8px; word-break:break-word; white-space:pre-wrap; }
+.props-value.note { min-height:48px; }
+.attr-list { display:flex; flex-direction:column; gap:4px; }
+.attr-row { display:flex; gap:6px; font-size:0.82rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:5px 8px; }
+.attr-key { color:#93c5fd; font-weight:600; min-width:70px; }
+.attr-val { word-break:break-word; }
+.rel-item { font-size:0.82rem; padding:6px 8px; border:1px solid var(--border); border-radius:4px; margin-bottom:4px; background:var(--bg); }
+.rel-dir { color:var(--muted); margin-right:4px; }
+.zoom-controls { position:absolute; right:12px; bottom:12px; display:flex; gap:6px; align-items:center; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:6px; z-index:5; }
+.zoom-controls button { background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; min-width:36px; min-height:36px; cursor:pointer; font-size:1rem; }
+#zoomLabel { font-size:0.75rem; color:var(--muted); padding:0 6px; min-width:40px; text-align:center; }
+.search-wrap { position:relative; margin-left:8px; flex:1 1 180px; min-width:140px; max-width:320px; }
+.search-wrap input {
+  width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text);
+  border-radius:6px; padding:8px 10px; font-size:16px;
+}
+.search-wrap input:focus { outline:none; border-color:var(--accent); }
+.search-results {
+  position:absolute; top:100%; left:0; right:0; margin-top:4px; z-index:50;
+  background:var(--panel); border:1px solid var(--border); border-radius:6px;
+  max-height:min(280px, 50vh); overflow:auto; box-shadow:0 8px 24px rgba(0,0,0,0.45);
+  -webkit-overflow-scrolling:touch;
+}
+.search-results.hidden { display:none; }
+.search-item {
+  display:flex; flex-direction:column; gap:2px; padding:10px 12px; cursor:pointer;
+  border-bottom:1px solid var(--border); font-size:0.9rem;
+}
+.search-item:last-child { border-bottom:none; }
+.search-item:hover, .search-item.active { background:rgba(59,130,246,0.12); }
+.search-item .si-type {
+  font-size:0.65rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted);
+}
+.search-item .si-label { color:var(--text); font-weight:600; }
+.search-item .si-meta { color:var(--muted); font-size:0.75rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.search-empty { padding:12px; color:var(--muted); font-size:0.85rem; text-align:center; }
+.props-toggle {
+  display:none; position:absolute; left:12px; bottom:12px; z-index:5;
+  background:var(--panel); border:1px solid var(--border); color:var(--text);
+  border-radius:8px; padding:10px 14px; font-size:0.85rem; cursor:pointer;
+}
+body.props-open .props-toggle { display:none; }
+
+@media (max-width: 768px) {
+  html, body { height:100%; height:100dvh; overflow:hidden; }
+  .toolbar { gap:6px; padding:8px; }
+  .hint { display:none; }
+  .toolbar strong { font-size:0.85rem; max-width:30vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .workspace { flex-direction:column; height:calc(100% - 52px); height:calc(100dvh - 52px); }
+  .graph-pane { flex:1 1 auto; width:100%; min-height:40%; }
+  .resizer { display:none; }
+  .props-pane {
+    display:none; width:100% !important; max-width:none; min-width:0;
+    border-left:none; border-top:1px solid var(--border);
+    flex:0 0 auto; max-height:45%; max-height:45dvh;
+  }
+  body.props-open .props-pane { display:block; }
+  body.props-open .props-toggle { display:none; }
+  .props-toggle { display:block; }
+  body.props-open .props-toggle-close { display:block; }
+  .zoom-controls { right:8px; bottom:8px; }
+  .zoom-controls button { min-width:40px; min-height:40px; }
+  .search-wrap { flex:1 1 100%; max-width:none; margin-left:0; order:5; }
+  .props-row { flex-direction:column; gap:4px; }
+  .props-label { width:auto; }
+}
+@media (max-width: 768px) {
+  .props-toggle-close {
+    display:none; position:sticky; top:0; float:right; z-index:2;
+    background:var(--bg); border:1px solid var(--border); color:var(--text);
+    border-radius:6px; padding:6px 10px; margin-bottom:8px; cursor:pointer;
+  }
+  body.props-open .props-toggle-close { display:inline-block; }
+}
+`;
+
+    const htmlDoc = [
+      '<!DOCTYPE html>',
+      '<html lang="en">',
+      '<head>',
+      '<meta charset="UTF-8" />',
+      '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />',
+      '<title>' + safeName + ' (read-only)</title>',
+      '<style>' + css + '</style>',
+      '</head>',
+      '<body>',
+      '<header class="toolbar">',
+      '<div class="brand">GraphDB</div>',
+      '<span class="badge">Read-only</span>',
+      '<strong>' + safeName + '</strong>',
+      '<div class="search-wrap">',
+      '<input type="search" id="searchInput" placeholder="Search nodes & groups…" autocomplete="off" />',
+      '<div id="searchResults" class="search-results hidden"></div>',
+      '</div>',
+      '<div class="hint">Wheel zoom · Drag background to pan · Click objects for properties</div>',
+      '</header>',
+      '<main class="workspace">',
+      '<section class="graph-pane" id="graphPane">',
+      svgMarkup,
+      '<div class="zoom-controls">',
+      '<button type="button" id="btnZoomIn" title="Zoom in">+</button>',
+      '<button type="button" id="btnZoomOut" title="Zoom out">−</button>',
+      '<button type="button" id="btnZoomReset" title="Fit">Fit</button>',
+      '<span id="zoomLabel">100%</span>',
+      '</div>',
+      '<button type="button" class="props-toggle" id="btnOpenProps">Properties</button>',
+      '</section>',
+      '<div class="resizer" id="paneResizer" title="Drag to resize"></div>',
+      '<aside class="props-pane" id="propsPane">',
+      '<button type="button" class="props-toggle-close" id="btnCloseProps" title="Close properties">Close</button>',
+      '<div id="propsContent" class="props-empty">Select a node, relationship, or group</div>',
+      '</aside>',
+      '</main>',
+      // JSON in a non-JS script tag — safe from </script> issues in graph text
+      '<script type="application/json" id="graph-data">' + graphJson.replace(/</g, '\\u003c') + '</script>',
+      '<script>',
+      viewerJs,
+      '</script>',
+      '</body>',
+      '</html>'
+    ].join('\n');
+
+    // Fix unicode escapes that should be real chars in HTML for the minus button
+    const htmlOut = htmlDoc.replace(/\\\\u2212/g, '\\u2212');
+
+    const blob = new Blob([htmlOut], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = safeName + '-viewer.html';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   btnAddEdge.addEventListener('click', () => {
     if (!currentGraph) {
       alert('Select a graph first');
@@ -2637,6 +3590,7 @@
       }
     });
   }
+  if (btnZoomFit) btnZoomFit.addEventListener('click', () => fitToView());
   if (btnZoomReset) btnZoomReset.addEventListener('click', () => {
     viewScale = 1;
     viewX = 0;
@@ -2759,6 +3713,8 @@
   function closeReportModal() {
     const modal = document.getElementById('reportModal');
     if (modal) modal.classList.add('hidden');
+    const hp = document.getElementById('reportHelpPanel');
+    if (hp) hp.classList.add('hidden');
   }
 
   function attrMatch(attrs, key, val, mode) {
@@ -2768,22 +3724,75 @@
       // no attr filter
       return true;
     }
-    if (mode === 'exists') {
-      return Object.prototype.hasOwnProperty.call(attrs, k);
-    }
-    if (!Object.prototype.hasOwnProperty.call(attrs, k)) return false;
-    const av = String(attrs[k] ?? '');
+    const hasKey = Object.prototype.hasOwnProperty.call(attrs, k);
+    if (mode === 'exists') return hasKey;
+    if (mode === 'not_exists') return !hasKey;
+
+    const av = hasKey ? String(attrs[k] ?? '') : '';
     const needle = String(val ?? '');
-    if (mode === 'equals') return av === needle;
+
+    if (mode === 'equals') {
+      if (!hasKey) return false;
+      return av === needle;
+    }
+    if (mode === 'not_equals') {
+      if (!hasKey) return true;
+      return av !== needle;
+    }
+    if (mode === 'not_contains') {
+      if (!needle) return !hasKey;
+      if (!hasKey) return true;
+      return !av.toLowerCase().includes(needle.toLowerCase());
+    }
+    if (mode === 'regex' || mode === 'not_regex') {
+      if (!needle) return mode === 'not_regex' ? true : hasKey;
+      if (!hasKey) return mode === 'not_regex';
+      const re = compileRegex(needle);
+      if (!re) return true;
+      const ok = re.test(av);
+      return mode === 'regex' ? ok : !ok;
+    }
     // contains (default)
-    if (!needle) return true; // key exists, any value
+    if (!hasKey) return false;
+    if (!needle) return true;
     return av.toLowerCase().includes(needle.toLowerCase());
   }
 
-  function labelMatch(label, filter) {
-    const f = (filter || '').trim().toLowerCase();
+  function compileRegex(pattern) {
+    const raw = String(pattern ?? '').trim();
+    if (!raw) return null;
+    // Support /pattern/flags form
+    if (raw.length >= 2 && raw.startsWith('/')) {
+      const last = raw.lastIndexOf('/');
+      if (last > 0) {
+        const body = raw.slice(1, last);
+        const flags = raw.slice(last + 1) || 'i';
+        try { return new RegExp(body, flags); } catch (e) {
+          throw new Error('Invalid regex: ' + e.message);
+        }
+      }
+    }
+    try {
+      return new RegExp(raw, 'i');
+    } catch (e) {
+      throw new Error('Invalid regex: ' + e.message);
+    }
+  }
+
+  function labelMatch(label, filter, mode) {
+    const f = String(filter ?? '').trim();
     if (!f) return true;
-    return String(label || '').toLowerCase().includes(f);
+    const text = String(label || '');
+    mode = mode || 'contains';
+    if (mode === 'equals') return text === f;
+    if (mode === 'regex' || mode === 'not_regex') {
+      const re = compileRegex(f);
+      if (!re) return true;
+      const ok = re.test(text);
+      return mode === 'regex' ? ok : !ok;
+    }
+    // contains (default)
+    return text.toLowerCase().includes(f.toLowerCase());
   }
 
   function formatAttrs(attrs) {
@@ -2800,15 +3809,16 @@
     }
     const type = (document.getElementById('reportType') || {}).value || 'all';
     const labelF = (document.getElementById('reportLabel') || {}).value || '';
+    const labelMode = (document.getElementById('reportLabelMatch') || {}).value || 'contains';
     const attrKey = (document.getElementById('reportAttrKey') || {}).value || '';
     const attrVal = (document.getElementById('reportAttrVal') || {}).value || '';
     const attrMode = (document.getElementById('reportAttrMatch') || {}).value || 'contains';
 
     const rows = [];
-
+    try {
     if (type === 'all' || type === 'node') {
       for (const n of Object.values(currentGraph.nodes || {})) {
-        if (!labelMatch(n.label, labelF)) continue;
+        if (!labelMatch(n.label, labelF, labelMode)) continue;
         if (!attrMatch(n.attributes, attrKey, attrVal, attrMode)) continue;
         rows.push({
           type: 'node',
@@ -2823,7 +3833,7 @@
     }
     if (type === 'all' || type === 'edge') {
       for (const e of Object.values(currentGraph.edges || {})) {
-        if (!labelMatch(e.label, labelF)) continue;
+        if (!labelMatch(e.label, labelF, labelMode)) continue;
         if (!attrMatch(e.attributes, attrKey, attrVal, attrMode)) continue;
         rows.push({
           type: 'edge',
@@ -2838,7 +3848,7 @@
     }
     if (type === 'all' || type === 'group') {
       for (const g of Object.values(currentGraph.groups || {})) {
-        if (!labelMatch(g.label, labelF)) continue;
+        if (!labelMatch(g.label, labelF, labelMode)) continue;
         if (!attrMatch(g.attributes, attrKey, attrVal, attrMode)) continue;
         const memberLabels = [];
         for (const nid of g.nodeIds || []) {
@@ -2861,6 +3871,9 @@
     rows.sort((a, b) => (a.type + a.label).localeCompare(b.type + b.label));
     lastReportRows = rows;
     renderReportTable(rows);
+    } catch (err) {
+      alert(err.message || String(err));
+    }
   }
 
   function reportShowIdEnabled() {
@@ -2998,6 +4011,27 @@
       e.preventDefault();
       e.stopPropagation();
       closeReportModal();
+      return;
+    }
+    if (t.id === 'reportHelp' || t.closest('#reportHelp')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const hp = document.getElementById('reportHelpPanel');
+      if (hp) hp.classList.remove('hidden');
+      return;
+    }
+    if (t.id === 'reportHelpClose' || t.closest('#reportHelpClose')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const hp = document.getElementById('reportHelpPanel');
+      if (hp) hp.classList.add('hidden');
+      return;
+    }
+    if (t.id === 'reportHelpPanel') {
+      // click backdrop of help panel
+      e.preventDefault();
+      e.stopPropagation();
+      t.classList.add('hidden');
       return;
     }
     if (t.id === 'reportRun' || t.closest('#reportRun')) {

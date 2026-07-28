@@ -252,9 +252,12 @@ func (srv *Server) createNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Label      string            `json:"label"`
-		Attributes map[string]string `json:"attributes"`
-		Position   Position          `json:"position"`
+		Label             string            `json:"label"`
+		Note              string            `json:"note"`
+		Attributes        map[string]string `json:"attributes"`
+		VisibleAttributes map[string]bool   `json:"visibleAttributes"`
+		AttributeOrder    []string          `json:"attributeOrder"`
+		Position          Position          `json:"position"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", 400)
@@ -268,10 +271,13 @@ func (srv *Server) createNode(w http.ResponseWriter, r *http.Request) {
 	}
 	id := fmt.Sprintf("n%d", time.Now().UnixNano())
 	node := &Node{
-		ID:         id,
-		Label:      req.Label,
-		Attributes: req.Attributes,
-		Position:   req.Position,
+		ID:                id,
+		Label:             req.Label,
+		Note:              req.Note,
+		Attributes:        req.Attributes,
+		VisibleAttributes: req.VisibleAttributes,
+		AttributeOrder:    req.AttributeOrder,
+		Position:          req.Position,
 	}
 	if node.Position.X == 0 && node.Position.Y == 0 {
 		// default position based on count
@@ -379,9 +385,11 @@ func (srv *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Label             string            `json:"label"`
+		Note              string            `json:"note"`
 		NodeIDs           []string          `json:"nodeIds"`
 		Attributes        map[string]string `json:"attributes"`
 		VisibleAttributes map[string]bool   `json:"visibleAttributes"`
+		AttributeOrder    []string          `json:"attributeOrder"`
 		Color             string            `json:"color"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -408,9 +416,11 @@ func (srv *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 	grp := &Group{
 		ID:                id,
 		Label:             req.Label,
+		Note:              req.Note,
 		NodeIDs:           req.NodeIDs,
 		Attributes:        req.Attributes,
 		VisibleAttributes: req.VisibleAttributes,
+		AttributeOrder:    req.AttributeOrder,
 		Color:             req.Color,
 	}
 	srv.store.mu.Lock()
@@ -522,6 +532,7 @@ func (srv *Server) createEdge(w http.ResponseWriter, r *http.Request) {
 		From       string            `json:"from"`
 		To         string            `json:"to"`
 		Label      string            `json:"label"`
+		Note       string            `json:"note"`
 		Attributes map[string]string `json:"attributes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -552,6 +563,7 @@ func (srv *Server) createEdge(w http.ResponseWriter, r *http.Request) {
 		From:       req.From,
 		To:         req.To,
 		Label:      req.Label,
+		Note:       req.Note,
 		Attributes: req.Attributes,
 	}
 	srv.store.mu.Lock()

@@ -26,6 +26,8 @@
   const graphSelect = document.getElementById('graphSelect');
   const btnNew = document.getElementById('btnNew');
   const btnSave = document.getElementById('btnSave');
+  const btnExport = document.getElementById('btnExport');
+  const exportMenu = document.getElementById('exportMenu');
   const btnExportPng = document.getElementById('btnExportPng');
   const btnExportMhtml = document.getElementById('btnExportMhtml');
   const btnReport = document.getElementById('btnReport');
@@ -1407,8 +1409,8 @@
       const relList = document.getElementById('relList');
       for (const edge of Object.values(currentGraph.edges)) {
         if (edge.from !== node.id && edge.to !== node.id) continue;
-        const otherId = edge.from === node.id ? edge.to : edge.from;
-        const dir = edge.from === node.id ? '→' : '←';
+        const outbound = edge.from === node.id;
+        const otherId = outbound ? edge.to : edge.from;
         const otherGroup = currentGraph.groups[otherId];
         let membersHtml = '';
         if (otherGroup) {
@@ -1424,11 +1426,18 @@
         }
         const item = document.createElement('div');
         item.className = 'rel-item';
-        item.innerHTML = `
+        item.innerHTML = outbound ? `
           <div class="rel-line">
-            <span class="rel-dir">${dir}</span>
             <strong>${escapeHtml(edge.label)}</strong>
-            <span style="color:var(--muted)">to</span>
+            <span class="rel-dir">to</span>
+            <span>${escapeHtml(endpointLabel(otherId))}</span>
+            <button class="btn-icon" data-edge="${edge.id}" style="margin-left:auto">×</button>
+          </div>
+          ${membersHtml}
+        ` : `
+          <div class="rel-line">
+            <span class="rel-dir">from</span>
+            <strong>${escapeHtml(edge.label)}</strong>
             <span>${escapeHtml(endpointLabel(otherId))}</span>
             <button class="btn-icon" data-edge="${edge.id}" style="margin-left:auto">×</button>
           </div>
@@ -1852,16 +1861,20 @@
         if (!fromIsGroup && !toIsGroup) continue;
 
         const outbound = fromIsGroup;
-        const dir = outbound ? '→' : '←';
         const otherId = outbound ? edge.to : edge.from;
-
         const item = document.createElement('div');
         item.className = 'rel-item';
-        item.innerHTML = `
+        item.innerHTML = outbound ? `
           <div class="rel-line">
-            <span class="rel-dir">${dir}</span>
             <strong>${escapeHtml(edge.label)}</strong>
-            <span style="color:var(--muted)">to</span>
+            <span class="rel-dir">to</span>
+            <span>${escapeHtml(endpointLabel(otherId))}</span>
+            <button class="btn-icon" data-edge="${edge.id}" style="margin-left:auto" title="Delete relationship">×</button>
+          </div>
+        ` : `
+          <div class="rel-line">
+            <span class="rel-dir">from</span>
+            <strong>${escapeHtml(edge.label)}</strong>
             <span>${escapeHtml(endpointLabel(otherId))}</span>
             <button class="btn-icon" data-edge="${edge.id}" style="margin-left:auto" title="Delete relationship">×</button>
           </div>
@@ -2085,8 +2098,30 @@
   btnSave.addEventListener('click', saveGraph);
   btnDeleteGraph.addEventListener('click', deleteGraph);
   btnAddNode.addEventListener('click', addNode);
-  if (btnExportPng) btnExportPng.addEventListener('click', exportGraphPng);
-  if (btnExportMhtml) btnExportMhtml.addEventListener('click', exportReadonlyMhtml);
+  function closeExportMenu() {
+    if (exportMenu) exportMenu.classList.add('hidden');
+  }
+  if (btnExport && exportMenu) {
+    btnExport.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exportMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+      if (!exportMenu.classList.contains('hidden')) {
+        if (!exportMenu.contains(e.target) && e.target !== btnExport) closeExportMenu();
+      }
+    });
+  }
+  if (btnExportPng) btnExportPng.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeExportMenu();
+    exportGraphPng();
+  });
+  if (btnExportMhtml) btnExportMhtml.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeExportMenu();
+    exportReadonlyMhtml();
+  });
   if (btnDownloadJson) btnDownloadJson.addEventListener('click', downloadGraphJson);
   if (btnUploadJson) btnUploadJson.addEventListener('click', () => {
     if (jsonFileInput) jsonFileInput.click();
@@ -2998,12 +3033,8 @@
     document.body.classList.add('props-open');
   };
   var btnOpenProps = document.getElementById('btnOpenProps');
-  var btnCloseProps = document.getElementById('btnCloseProps');
   if (btnOpenProps) btnOpenProps.addEventListener('click', function() {
     document.body.classList.add('props-open');
-  });
-  if (btnCloseProps) btnCloseProps.addEventListener('click', function() {
-    document.body.classList.remove('props-open');
   });
 
   // iOS-friendly touch: pan, pinch, and explicit tap selection
@@ -3395,7 +3426,6 @@ body.props-open .props-toggle { display:none; }
       '</section>',
       '<div class="resizer" id="paneResizer" title="Drag to resize"></div>',
       '<aside class="props-pane" id="propsPane">',
-      '<button type="button" class="props-toggle-close" id="btnCloseProps" title="Close properties">Close</button>',
       '<div id="propsContent" class="props-empty">Select a node, relationship, or group</div>',
       '</aside>',
       '</main>',

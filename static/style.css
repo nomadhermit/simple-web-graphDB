@@ -11,7 +11,7 @@
   --node-bg: #1e293b;
   --node-border: #475569;
   --node-header: #334155;
-  --selected: #3b82f6;
+  --selected: #ef4444;
   --rel-color: #64748b;
 }
 
@@ -238,8 +238,8 @@ body.linking #graphSvg {
 }
 .node-group.selected .node-rect {
   stroke: var(--selected);
-  stroke-width: 2.5;
-  filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.5));
+  stroke-width: 3;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.7));
 }
 .node-group.link-source .node-rect {
   stroke: #22c55e;
@@ -285,10 +285,11 @@ body.linking .node-group.link-source {
   cursor: pointer;
 }
 .group-box.selected {
-  fill: rgba(59, 130, 246, 0.16);
-  stroke: #60a5fa;
-  stroke-width: 2.5;
+  fill: rgba(239, 68, 68, 0.12);
+  stroke: #ef4444;
+  stroke-width: 3;
   stroke-dasharray: none;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.55));
 }
 .group-box.link-source {
   stroke: #22c55e;
@@ -305,9 +306,11 @@ body.linking .node-group.link-source {
   rx: 14;
 }
 .group-box-parent.selected {
-  fill: rgba(245, 158, 11, 0.18);
-  stroke: #fbbf24;
+  fill: rgba(239, 68, 68, 0.14);
+  stroke: #ef4444;
+  stroke-width: 3;
   stroke-dasharray: none;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.55));
 }
 .group-box-child {
   fill: rgba(16, 185, 129, 0.12);
@@ -317,9 +320,11 @@ body.linking .node-group.link-source {
   rx: 8;
 }
 .group-box-child.selected {
-  fill: rgba(16, 185, 129, 0.20);
-  stroke: #34d399;
+  fill: rgba(239, 68, 68, 0.14);
+  stroke: #ef4444;
+  stroke-width: 3;
   stroke-dasharray: none;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.55));
 }
 .group-parent .group-label {
   fill: #fcd34d;
@@ -357,8 +362,9 @@ body.linking .group-shape {
 }
 .edge-path.selected {
   stroke: var(--selected);
-  stroke-width: 2.5;
+  stroke-width: 3;
   marker-end: url(#arrowhead-selected);
+  filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.6));
 }
 .edge-path-stem {
   fill: none;
@@ -368,7 +374,7 @@ body.linking .group-shape {
 }
 .edge-path-stem.selected {
   stroke: var(--selected);
-  stroke-width: 2.5;
+  stroke-width: 3;
 }
 .fork-junction {
   fill: var(--rel-color);
@@ -968,4 +974,42 @@ body.linking .group-shape {
   margin-top: 12px;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.export-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.export-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  z-index: 80;
+  min-width: 180px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.export-menu.hidden {
+  display: none;
+}
+.export-menu button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.export-menu button:hover {
+  background: rgba(59, 130, 246, 0.15);
 }

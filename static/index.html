@@ -14,9 +14,14 @@
       <select id="graphSelect"></select>
       <button id="btnNew" title="Create new graph">New</button>
       <button id="btnSave" title="Save current graph">Save</button>
-      <button id="btnExportPng" title="Export graph view as PNG">Export PNG</button>
-      <button id="btnExportMhtml" title="Export read-only interactive HTML viewer (open the .html file in Chrome)">Export HTML</button>
-      <button id="btnReport" title="Query and report on objects/attributes">Report</button>
+      <div class="export-menu-wrap">
+        <button id="btnExport" title="Export graph">Export ▾</button>
+        <div id="exportMenu" class="export-menu hidden">
+          <button type="button" id="btnExportPng" data-export="png">PNG image</button>
+          <button type="button" id="btnExportMhtml" data-export="html">Interactive HTML</button>
+        </div>
+      </div>
+      <button id="btnReport" title="Search and filter objects by label or attributes">Search</button>
       <button id="btnDownloadJson" title="Download graph as JSON file">Download JSON</button>
       <button id="btnUploadJson" title="Upload graph from JSON file">Upload JSON</button>
       <input type="file" id="jsonFileInput" accept="application/json,.json" style="display:none" />
@@ -40,7 +45,7 @@
             <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
           </marker>
           <marker id="arrowhead-selected" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+            <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
           </marker>
         </defs>
         <g id="viewport">
@@ -92,7 +97,7 @@
   <div id="reportModal" class="modal hidden">
     <div class="modal-content report-modal" id="reportPanel">
       <div class="report-header">
-        <h3>Report</h3>
+        <h3>Search</h3>
         <div class="report-header-actions">
           <button type="button" id="reportHelp" title="Regex syntax help">Help</button>
           <button type="button" id="reportClose" class="btn-icon" title="Close">×</button>

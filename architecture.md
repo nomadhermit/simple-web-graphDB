@@ -6,13 +6,13 @@ High-level structure of **Simple GraphDB**: a single Go binary serving an embedd
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                         GraphDB (single Go binary)                       │
+│                         GraphDB (single Go binary)                        │
 │                                                                          │
 │   main.go  ──►  net/http server  ──►  :8080 (localhost default)          │
 │                    │                                                     │
 │         ┌──────────┴──────────┐                                          │
 │         ▼                     ▼                                          │
-│   embed.FS static/      REST API  /api/*                                 │
+│   embed.FS static/      REST API  /api/*                                  │
 │   (index.html,          (JSON in / out)                                  │
 │    app.js, style.css)                                                    │
 └─────────┬───────────────────────┬────────────────────────────────────────┘
@@ -41,7 +41,7 @@ High-level structure of **Simple GraphDB**: a single Go binary serving an embedd
         │  fetch / PATCH / POST / DELETE
         ▼       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         HTTP API surface                                │
+│                         HTTP API surface                                 │
 │                                                                         │
 │  GET    /api/graphs                      list names                     │
 │  POST   /api/graphs                      create empty graph             │

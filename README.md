@@ -4,9 +4,7 @@ A lightweight local graph database with a visual ERD-inspired UI, written in pur
 
 **Architecture:** see [architecture.md](architecture.md) for a flow diagram of the application layers, API, data model, and request paths.
 
-!! for local use only, not for internet facing scenarios without proper security enhancements and review !!
-
-!! vibe coded with Grok as experiment !!
+**Genealogy fork:** [familytree-app](../familytree-app/) — same engine, optimized for family trees (people, kinship relations, family groups).
 
 ## Features
 

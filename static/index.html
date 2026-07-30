@@ -40,6 +40,14 @@
       <button id="btnPasteNode" title="Paste into current graph (Ctrl+V)">Paste</button>
       <button id="btnAddEdge" title="Select a node, click this, then click the target node">+ Rel</button>
       <button id="btnGroup" title="Group selected nodes (Shift+click to multi-select)">Group</button>
+      <div class="export-menu-wrap">
+        <button id="btnLayers" title="Relationship hierarchy from selected node">Hierarchy ▾</button>
+        <div id="layersMenu" class="export-menu hidden">
+          <button type="button" id="btnLayerHierH" data-layer-view="hierarchy-h">Hierarchy (horizontal)</button>
+          <button type="button" id="btnLayerHierV" data-layer-view="hierarchy-v">Hierarchy (vertical)</button>
+        </div>
+      </div>
+      <button id="btnGraphView" class="hidden" title="Return to graph view">Graph</button>
       <button id="btnDeleteSelected" class="danger" title="Delete selected node, edge, or group">Delete</button>
     </div>
     <div class="spacer"></div>
@@ -49,6 +57,29 @@
   <main class="workspace">
     <section class="pane left" id="graphPane">
       <div id="lassoRect" class="lasso-rect hidden"></div>
+      <div id="layerView" class="layer-view hidden">
+        <div class="layer-toolbar">
+          <span id="layerTitle">Hierarchy</span>
+          <label>Depth <select id="layerDepth">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+          </select></label>
+          <label id="layerOrientWrap">Layout
+            <select id="layerOrient">
+              <option value="h">Horizontal</option>
+              <option value="v">Vertical</option>
+            </select>
+          </label>
+          <button type="button" id="btnLayerExportPng" title="Export as PNG">PNG</button>
+          <button type="button" id="btnLayerClose">Close</button>
+        </div>
+        <svg id="layerSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
       <svg id="graphSvg" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">

@@ -4027,11 +4027,22 @@ body.props-open .props-toggle { display:none; }
     }
   });
 
-  // click on empty canvas deselects / cancels link mode
+  // Background click deselects. Uses *capture* so we can suppress the synthetic
+  // click that the browser fires after mouseup (after pan / lasso).
+  // Event order for a drag on empty canvas:
+  //   1. mousedown  (graphSvg)  → start pan or lasso
+  //   2. mousemove  (document)  → update pan / lasso box
+  //   3. mouseup    (document)  → finish pan / apply lasso selection
+  //   4. click      (graphSvg)  → must NOT clearSelection after (3)
   graphSvg.addEventListener('click', (e) => {
-    if (panState && panState.moved) return; // ignore click after pan
+    if (panState && panState.moved) {
+      e.stopPropagation();
+      return;
+    }
     if (lassoJustFinished) {
       lassoJustFinished = false;
+      e.stopPropagation();
+      e.preventDefault();
       return;
     }
     if (e.target === graphSvg || e.target.id === 'viewport' || e.target.id === 'edgesLayer' || e.target.id === 'nodesLayer' || e.target.id === 'groupsLayer') {
@@ -4041,7 +4052,7 @@ body.props-open .props-toggle { display:none; }
       clearSelection();
       render();
     }
-  });
+  }, true); // capture: runs before bubble listeners on nodes/groups
 
   // Pan: drag on empty background (middle mouse, or left without Shift)
   // Lasso: Shift + left-drag on empty background
@@ -4065,9 +4076,11 @@ body.props-open .props-toggle { display:none; }
       };
       const el = document.getElementById('lassoRect');
       if (el) {
+        const pane = document.getElementById('graphPane');
+        const prect = pane ? pane.getBoundingClientRect() : { left: 0, top: 0 };
         el.classList.remove('hidden');
-        el.style.left = e.clientX + 'px';
-        el.style.top = e.clientY + 'px';
+        el.style.left = (e.clientX - prect.left) + 'px';
+        el.style.top = (e.clientY - prect.top) + 'px';
         el.style.width = '0px';
         el.style.height = '0px';
       }
@@ -4150,6 +4163,8 @@ body.props-open .props-toggle { display:none; }
       return;
     }
     lassoJustFinished = true;
+    // Keep flag past the trailing click (same pattern as panState + setTimeout(0))
+    setTimeout(() => { lassoJustFinished = false; }, 0);
     const endWorld = screenToWorld(e.clientX, e.clientY);
     const x1 = Math.min(lassoState.startWorld.x, endWorld.x);
     const y1 = Math.min(lassoState.startWorld.y, endWorld.y);
@@ -4826,6 +4841,445 @@ body.props-open .props-toggle { display:none; }
       applySavedSize();
     };
   })();
+
+
+  // ========== Hierarchy view (horizontal / vertical; no fan) ==========
+  let layerViewMode = 'graph';
+  let layerFocusId = null;
+  let layerViewType = 'hierarchy-h';
+  let layerScale = 1, layerX = 0, layerY = 0;
+  let layerPanState = null;
+  const LAYER_MIN_ZOOM = 0.2, LAYER_MAX_ZOOM = 5;
+
+  const btnLayers = document.getElementById('btnLayers');
+  const layersMenu = document.getElementById('layersMenu');
+  const btnLayerHierH = document.getElementById('btnLayerHierH');
+  const btnLayerHierV = document.getElementById('btnLayerHierV');
+  const btnGraphView = document.getElementById('btnGraphView');
+  const layerView = document.getElementById('layerView');
+  const layerSvg = document.getElementById('layerSvg');
+  const layerTitle = document.getElementById('layerTitle');
+  const layerDepth = document.getElementById('layerDepth');
+  const layerOrient = document.getElementById('layerOrient');
+  const layerOrientWrap = document.getElementById('layerOrientWrap');
+  const btnLayerExportPng = document.getElementById('btnLayerExportPng');
+  const btnLayerClose = document.getElementById('btnLayerClose');
+
+  function shortLabel(s, n) {
+    s = String(s || 'Node');
+    return s.length <= n ? s : s.slice(0, n - 1) + '…';
+  }
+  function wrapLabelLines(label, maxChars, maxLines) {
+    const s = String(label || 'Node').trim() || 'Node';
+    maxChars = Math.max(3, maxChars | 0);
+    maxLines = Math.max(1, maxLines | 0);
+    const words = s.split(/\s+/);
+    const lines = [];
+    let cur = '';
+    for (const word of words) {
+      const next = cur ? cur + ' ' + word : word;
+      if (next.length <= maxChars) cur = next;
+      else {
+        if (cur) lines.push(cur);
+        cur = word.length > maxChars ? word.slice(0, maxChars - 1) + '…' : word;
+        if (lines.length >= maxLines) break;
+      }
+    }
+    if (cur && lines.length < maxLines) lines.push(cur);
+    return lines.length ? lines : [shortLabel(s, maxChars)];
+  }
+  function isGroupId(id) {
+    return !!(currentGraph && currentGraph.groups && currentGraph.groups[id]);
+  }
+  function isNodeId(id) {
+    return !!(currentGraph && currentGraph.nodes && currentGraph.nodes[id]);
+  }
+  function expandEndpoint(id, excludeId) {
+    if (isNodeId(id)) return id === excludeId ? [] : [id];
+    if (isGroupId(id)) {
+      const members = (currentGraph.groups[id].nodeIds || []).filter((nid) => isNodeId(nid));
+      if (excludeId) return members.filter((nid) => nid !== excludeId);
+      return members;
+    }
+    return [];
+  }
+  function relatedNodes(nid) {
+    if (!nid || !isNodeId(nid) || !currentGraph) return [];
+    const edges = Object.values(currentGraph.edges || {});
+    const out = [];
+    const local = new Set();
+    for (const e of edges) {
+      let other = null;
+      if (e.from === nid) other = e.to;
+      else if (e.to === nid) other = e.from;
+      else continue;
+      for (const mid of expandEndpoint(other, nid)) {
+        if (local.has(mid)) continue;
+        local.add(mid);
+        out.push(mid);
+      }
+    }
+    return out;
+  }
+  function buildTreeSlots(focusId, maxDepth) {
+    const slots = [];
+    if (!currentGraph || !isNodeId(focusId)) return slots;
+    slots[0] = [{ id: focusId, parent: -1 }];
+    const seen = new Set([focusId]);
+    for (let g = 1; g <= maxDepth; g++) {
+      const prev = slots[g - 1];
+      const row = [];
+      prev.forEach((slot, pi) => {
+        if (slot.id == null) {
+          row.push({ id: null, parent: pi });
+          return;
+        }
+        const kids = relatedNodes(slot.id).filter((id) => !seen.has(id));
+        if (!kids.length) {
+          row.push({ id: null, parent: pi });
+        } else {
+          for (const id of kids) {
+            seen.add(id);
+            row.push({ id: id, parent: pi });
+          }
+        }
+      });
+      slots[g] = row.length ? row : [{ id: null, parent: 0 }];
+    }
+    return slots;
+  }
+  function applyLayerViewport() {
+    if (!layerSvg) return;
+    const vp = layerSvg.querySelector('#layerViewport');
+    if (vp) vp.setAttribute('transform', 'translate(' + layerX + ',' + layerY + ') scale(' + layerScale + ')');
+    if (typeof zoomLabel !== 'undefined' && zoomLabel) zoomLabel.textContent = Math.round(layerScale * 100) + '%';
+  }
+  function setLayerZoom(newScale, clientX, clientY) {
+    if (!layerSvg) return;
+    const rect = layerSvg.getBoundingClientRect();
+    const cx = clientX != null ? clientX - rect.left : rect.width / 2;
+    const cy = clientY != null ? clientY - rect.top : rect.height / 2;
+    const wx = (cx - layerX) / layerScale;
+    const wy = (cy - layerY) / layerScale;
+    layerScale = Math.max(LAYER_MIN_ZOOM, Math.min(LAYER_MAX_ZOOM, newScale));
+    layerX = cx - wx * layerScale;
+    layerY = cy - wy * layerScale;
+    applyLayerViewport();
+  }
+  function fitLayerView() {
+    if (!layerSvg) return;
+    const rect = layerSvg.getBoundingClientRect();
+    const w = Math.max(rect.width || 600, 320);
+    const h = Math.max(rect.height || 400, 320);
+    const pad = 24;
+    const contentW = parseFloat(layerSvg.dataset.contentW) || w;
+    const contentH = parseFloat(layerSvg.dataset.contentH) || h;
+    const sx = (w - pad * 2) / Math.max(contentW, 1);
+    const sy = (h - pad * 2) / Math.max(contentH, 1);
+    layerScale = Math.max(LAYER_MIN_ZOOM, Math.min(LAYER_MAX_ZOOM, Math.min(sx, sy) * 0.92));
+    layerX = pad + (w - pad * 2 - contentW * layerScale) / 2;
+    layerY = pad + (h - pad * 2 - contentH * layerScale) / 2;
+    applyLayerViewport();
+  }
+  function selectLayerNode(nid) {
+    selectedId = nid;
+    selectedType = 'node';
+    selectedNodeIds = new Set([nid]);
+    selectedGroupIds = new Set();
+    renderLayerView();
+    renderProps();
+  }
+  function openLayerView(focusId, viewType) {
+    if (!currentGraph || !focusId || !isNodeId(focusId)) {
+      alert('Select a node first');
+      return;
+    }
+    layerFocusId = focusId;
+    layerViewType = viewType || 'hierarchy-h';
+    layerViewMode = 'layers';
+    if (layerView) layerView.classList.remove('hidden');
+    if (graphSvg) graphSvg.style.display = 'none';
+    if (btnGraphView) btnGraphView.classList.remove('hidden');
+    if (btnLayers) btnLayers.classList.add('hidden');
+    if (layersMenu) layersMenu.classList.add('hidden');
+    const node = currentGraph.nodes[focusId];
+    if (layerTitle) layerTitle.textContent = 'Hierarchy: ' + (node.label || focusId);
+    if (layerOrient) layerOrient.value = layerViewType === 'hierarchy-v' ? 'v' : 'h';
+    layerScale = 1; layerX = 0; layerY = 0;
+    renderLayerView();
+    fitLayerView();
+  }
+  function closeLayerView() {
+    layerViewMode = 'graph';
+    layerFocusId = null;
+    if (layerView) layerView.classList.add('hidden');
+    if (graphSvg) graphSvg.style.display = '';
+    if (btnGraphView) btnGraphView.classList.add('hidden');
+    if (btnLayers) btnLayers.classList.remove('hidden');
+    if (typeof zoomLabel !== 'undefined' && zoomLabel) zoomLabel.textContent = Math.round(viewScale * 100) + '%';
+    render();
+  }
+  function renderLayerView() {
+    renderLayerHierarchy();
+  }
+  function renderLayerHierarchy() {
+    if (!layerSvg || !currentGraph || !layerFocusId) return;
+    const maxDepth = layerDepth ? parseInt(layerDepth.value, 10) || 3 : 3;
+    const horizontal = layerViewType !== 'hierarchy-v';
+    const slots = buildTreeSlots(layerFocusId, maxDepth);
+    const rect = layerSvg.getBoundingClientRect();
+    const vw = Math.max(rect.width || 600, 320);
+    const vh = Math.max(rect.height || 400, 320);
+    layerSvg.setAttribute('viewBox', '0 0 ' + vw + ' ' + vh);
+    layerSvg.innerHTML = '';
+    const vp = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    vp.setAttribute('id', 'layerViewport');
+    layerSvg.appendChild(vp);
+    const CARD_W = 150, CARD_H = 70, GAP = 12, COL_GAP = 64, ROW_GAP = 48;
+    const leafCount = [];
+    function countLeaves(g, i) {
+      if (leafCount[g] && leafCount[g][i] != null) return leafCount[g][i];
+      if (!leafCount[g]) leafCount[g] = [];
+      if (g === maxDepth) { leafCount[g][i] = 1; return 1; }
+      const kids = [];
+      (slots[g + 1] || []).forEach((s, ki) => { if (s.parent === i) kids.push(ki); });
+      if (!kids.length) { leafCount[g][i] = 1; return 1; }
+      let sum = 0;
+      for (const ki of kids) sum += countLeaves(g + 1, ki);
+      leafCount[g][i] = Math.max(1, sum);
+      return leafCount[g][i];
+    }
+    (slots[0] || []).forEach((_, i) => countLeaves(0, i));
+    const unitPos = [];
+    function assignPos(g, i, start) {
+      if (!unitPos[g]) unitPos[g] = [];
+      const n = countLeaves(g, i);
+      unitPos[g][i] = start + n / 2;
+      if (g >= maxDepth) return;
+      let cursor = start;
+      (slots[g + 1] || []).forEach((s, ki) => {
+        if (s.parent !== i) return;
+        const ln = countLeaves(g + 1, ki);
+        assignPos(g + 1, ki, cursor);
+        cursor += ln;
+      });
+    }
+    assignPos(0, 0, 0);
+    const positions = [];
+    for (let g = 0; g <= maxDepth; g++) {
+      positions[g] = [];
+      (slots[g] || []).forEach((slot, i) => {
+        const u = unitPos[g][i];
+        if (horizontal) {
+          const x = 24 + g * (CARD_W + COL_GAP);
+          const y = 24 + (u - 0.5) * (CARD_H + GAP);
+          positions[g][i] = { x, y, id: slot.id, parent: slot.parent, cx: x + CARD_W, cy: y + CARD_H / 2, lx: x, ly: y + CARD_H / 2 };
+        } else {
+          const y = 24 + (maxDepth - g) * (CARD_H + ROW_GAP);
+          const x = 24 + (u - 0.5) * (CARD_W + GAP);
+          positions[g][i] = { x, y, id: slot.id, parent: slot.parent, cx: x + CARD_W / 2, cy: y, lx: x + CARD_W / 2, ly: y + CARD_H };
+        }
+      });
+    }
+    let contentW = 24, contentH = 24;
+    positions.forEach((row) => row.forEach((p) => {
+      contentW = Math.max(contentW, p.x + CARD_W + 24);
+      contentH = Math.max(contentH, p.y + CARD_H + 24);
+    }));
+    for (let g = 1; g <= maxDepth; g++) {
+      (positions[g] || []).forEach((p) => {
+        if (p.parent < 0) return;
+        const q = positions[g - 1][p.parent];
+        if (!q) return;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.classList.add('layer-hier-edge');
+        let d;
+        if (horizontal) {
+          const mx = (p.lx + q.cx) / 2;
+          d = 'M ' + q.cx + ' ' + q.cy + ' H ' + mx + ' V ' + p.ly + ' H ' + p.lx;
+        } else {
+          const my = (p.ly + q.cy) / 2;
+          d = 'M ' + q.lx + ' ' + q.cy + ' V ' + my + ' H ' + p.lx + ' V ' + p.ly;
+        }
+        path.setAttribute('d', d);
+        vp.appendChild(path);
+      });
+    }
+    for (let g = 0; g <= maxDepth; g++) {
+      (positions[g] || []).forEach((pos) => {
+        if (pos.id == null) {
+          const empty = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          empty.setAttribute('x', pos.x); empty.setAttribute('y', pos.y);
+          empty.setAttribute('width', CARD_W); empty.setAttribute('height', CARD_H);
+          empty.setAttribute('rx', 10);
+          empty.classList.add('layer-card', 'empty');
+          vp.appendChild(empty);
+          return;
+        }
+        const node = currentGraph.nodes[pos.id];
+        if (!node) return;
+        const gEl = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        const rectEl = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rectEl.setAttribute('x', pos.x); rectEl.setAttribute('y', pos.y);
+        rectEl.setAttribute('width', CARD_W); rectEl.setAttribute('height', CARD_H);
+        rectEl.setAttribute('rx', 10);
+        rectEl.classList.add('layer-card');
+        if (pos.id === layerFocusId) rectEl.classList.add('focus');
+        if (selectedType === 'node' && selectedId === pos.id) rectEl.classList.add('selected');
+        gEl.appendChild(rectEl);
+        const nameLines = wrapLabelLines(node.label, 20, 3);
+        const isFocus = pos.id === layerFocusId;
+        nameLines.forEach((line, li) => {
+          const tEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          tEl.setAttribute('x', pos.x + 12);
+          tEl.setAttribute('y', pos.y + CARD_H / 2 - ((nameLines.length - 1) * 13) / 2 + li * 13);
+          tEl.setAttribute('dominant-baseline', 'middle');
+          tEl.classList.add('layer-card-name');
+          if (isFocus) { tEl.setAttribute('fill', '#0f172a'); tEl.style.fill = '#0f172a'; }
+          tEl.textContent = line;
+          gEl.appendChild(tEl);
+        });
+        gEl.addEventListener('click', (e) => { e.stopPropagation(); selectLayerNode(pos.id); });
+        vp.appendChild(gEl);
+      });
+    }
+    layerSvg.dataset.contentW = String(contentW);
+    layerSvg.dataset.contentH = String(contentH);
+    applyLayerViewport();
+  }
+  async function exportLayerPng() {
+    if (!layerSvg || layerViewMode !== 'layers') { alert('Open a Hierarchy view first'); return; }
+    const pad = 40;
+    const cw = parseFloat(layerSvg.dataset.contentW) || 800;
+    const ch = parseFloat(layerSvg.dataset.contentH) || 600;
+    const minX = 0, minY = 0;
+    const width = Math.max(100, cw);
+    const height = Math.max(100, ch);
+    const clone = layerSvg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', String(Math.ceil(width)));
+    clone.setAttribute('height', String(Math.ceil(height)));
+    clone.setAttribute('viewBox', minX + ' ' + minY + ' ' + width + ' ' + height);
+    clone.style.background = '#0b1220';
+    const vp = clone.querySelector('#layerViewport');
+    if (vp) vp.removeAttribute('transform');
+    clone.querySelectorAll('g').forEach((g) => {
+      const card = g.querySelector(':scope > rect.layer-card') || g.querySelector(':scope > .layer-card');
+      if (!card) return;
+      const isFocus = card.classList.contains('focus');
+      g.querySelectorAll('.layer-card-name').forEach((txt) => {
+        const color = isFocus ? '#0f172a' : '#0f172a';
+        // light cards: always dark text for readability on #e2e8f0 / focus purple
+        txt.setAttribute('fill', color);
+        txt.style.fill = color;
+      });
+    });
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    style.textContent = `
+      .layer-card { fill: #e2e8f0; stroke: #475569; stroke-width: 1.5; }
+      .layer-card.focus { fill: #e9d5ff; stroke: #a78bfa; }
+      .layer-card.selected { stroke: #ef4444; stroke-width: 2.5; }
+      .layer-card.empty { fill: #1e293b; stroke: #334155; stroke-dasharray: 5 4; opacity: 0.55; }
+      .layer-card-name { fill: #0f172a; font-size: 13px; font-weight: 600; font-family: Segoe UI, system-ui, sans-serif; }
+      .layer-hier-edge { fill: none; stroke: #64748b; stroke-width: 1.5; }
+    `;
+    clone.insertBefore(style, clone.firstChild);
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('x', String(minX)); bg.setAttribute('y', String(minY));
+    bg.setAttribute('width', String(width)); bg.setAttribute('height', String(height));
+    bg.setAttribute('fill', '#0b1220');
+    const first = clone.querySelector('#layerViewport') || clone.firstChild;
+    if (first) clone.insertBefore(bg, first); else clone.appendChild(bg);
+    const svgText = new XMLSerializer().serializeToString(clone);
+    const url = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
+    try {
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+      const scale = 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(width * scale);
+      canvas.height = Math.ceil(height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0b1220';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0, width, height);
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      const base = (currentGraph && currentGraph.name) ? currentGraph.name : 'graph';
+      a.download = base + '-' + (layerViewType === 'hierarchy-v' ? 'hierarchy-v' : 'hierarchy-h') + '.png';
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (err) {
+      alert('PNG export failed: ' + (err && err.message ? err.message : err));
+    } finally { URL.revokeObjectURL(url); }
+  }
+  function selectedNodeForLayers() {
+    if (selectedType === 'node' && selectedId) return selectedId;
+    if (selectedNodeIds && selectedNodeIds.size) return [...selectedNodeIds][0];
+    return null;
+  }
+  if (btnLayers) btnLayers.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (layersMenu) layersMenu.classList.toggle('hidden');
+  });
+  function pickLayerView(vt) {
+    openLayerView(selectedNodeForLayers(), vt);
+  }
+  if (btnLayerHierH) btnLayerHierH.addEventListener('click', (e) => { e.stopPropagation(); pickLayerView('hierarchy-h'); });
+  if (btnLayerHierV) btnLayerHierV.addEventListener('click', (e) => { e.stopPropagation(); pickLayerView('hierarchy-v'); });
+  if (btnGraphView) btnGraphView.addEventListener('click', () => closeLayerView());
+  if (btnLayerClose) btnLayerClose.addEventListener('click', () => closeLayerView());
+  if (btnLayerExportPng) btnLayerExportPng.addEventListener('click', () => exportLayerPng());
+  if (layerDepth) layerDepth.addEventListener('change', () => {
+    if (layerViewMode === 'layers') { renderLayerView(); fitLayerView(); }
+  });
+  if (layerOrient) layerOrient.addEventListener('change', () => {
+    if (layerViewMode !== 'layers') return;
+    layerViewType = layerOrient.value === 'v' ? 'hierarchy-v' : 'hierarchy-h';
+    renderLayerView(); fitLayerView();
+  });
+  if (layerSvg) {
+    layerSvg.addEventListener('wheel', (e) => {
+      if (layerViewMode !== 'layers') return;
+      e.preventDefault();
+      setLayerZoom(layerScale * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX, e.clientY);
+    }, { passive: false });
+    layerSvg.addEventListener('mousedown', (e) => {
+      if (layerViewMode !== 'layers' || e.button !== 0) return;
+      const tg = e.target;
+      if (tg && tg.classList && tg.classList.contains('layer-card') && !tg.classList.contains('empty')) return;
+      layerPanState = { startX: e.clientX, startY: e.clientY, origX: layerX, origY: layerY };
+      layerSvg.classList.add('layer-panning');
+      e.preventDefault();
+    });
+  }
+  window.addEventListener('mousemove', (e) => {
+    if (!layerPanState || layerViewMode !== 'layers') return;
+    layerX = layerPanState.origX + (e.clientX - layerPanState.startX);
+    layerY = layerPanState.origY + (e.clientY - layerPanState.startY);
+    applyLayerViewport();
+  });
+  window.addEventListener('mouseup', () => {
+    if (layerPanState) {
+      if (layerSvg) layerSvg.classList.remove('layer-panning');
+      layerPanState = null;
+    }
+  });
+  if (btnZoomIn) {
+    btnZoomIn.addEventListener('click', (e) => {
+      if (layerViewMode === 'layers') { e.stopImmediatePropagation(); setLayerZoom(layerScale * 1.2); }
+    }, true);
+  }
+  if (btnZoomOut) {
+    btnZoomOut.addEventListener('click', (e) => {
+      if (layerViewMode === 'layers') { e.stopImmediatePropagation(); setLayerZoom(layerScale / 1.2); }
+    }, true);
+  }
+  if (btnZoomFit) {
+    btnZoomFit.addEventListener('click', (e) => {
+      if (layerViewMode === 'layers') { e.stopImmediatePropagation(); fitLayerView(); }
+    }, true);
+  }
 
   // --- Init ---
   refreshGraphList().then(() => {

@@ -42,6 +42,8 @@
   const btnExport = document.getElementById('btnExport');
   const exportMenu = document.getElementById('exportMenu');
   const btnExportPng = document.getElementById('btnExportPng');
+  const btnExportSvg = document.getElementById('btnExportSvg');
+  const btnExportPdf = document.getElementById('btnExportPdf');
   const btnExportMhtml = document.getElementById('btnExportMhtml');
   const btnReport = document.getElementById('btnReport');
   const btnDownloadJson = document.getElementById('btnDownloadJson');
@@ -2601,6 +2603,16 @@
       if (!exportMenu.contains(e.target) && e.target !== btnExport) closeExportMenu();
     }
   });
+  if (btnExportSvg) btnExportSvg.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeExportMenu();
+    exportGraphSvg();
+  });
+  if (btnExportPdf) btnExportPdf.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeExportMenu();
+    exportGraphPdf();
+  });
   if (btnExportPng) btnExportPng.addEventListener('click', (e) => {
     e.stopPropagation();
     closeAllMenus();
@@ -2941,13 +2953,7 @@
       alert('Import failed: ' + e.message);
     }
   }
-  async function exportGraphPng() {
-    if (!currentGraph) {
-      alert('No graph loaded');
-      return;
-    }
-
-    // Content bounds in world coordinates
+  function graphExportBounds() {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     let hasContent = false;
     for (const node of Object.values(currentGraph.nodes || {})) {
@@ -2967,31 +2973,27 @@
       maxX = Math.max(maxX, b.x + b.w);
       maxY = Math.max(maxY, b.y + b.h);
     }
-    if (!hasContent) {
-      alert('Graph is empty');
-      return;
-    }
-
+    if (!hasContent) return null;
     const pad = 40;
-    minX -= pad;
-    minY -= pad;
-    maxX += pad;
-    maxY += pad;
-    const width = Math.max(100, maxX - minX);
-    const height = Math.max(100, maxY - minY);
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    return {
+      minX, minY,
+      width: Math.max(100, maxX - minX),
+      height: Math.max(100, maxY - minY)
+    };
+  }
 
-    // Clone SVG and strip viewport pan/zoom for a full-content export
+  function buildExportSvgClone(bounds) {
+    const { minX, minY, width, height } = bounds;
     const clone = graphSvg.cloneNode(true);
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
     clone.setAttribute('width', String(Math.ceil(width)));
     clone.setAttribute('height', String(Math.ceil(height)));
-    clone.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`);
+    clone.setAttribute('viewBox', minX + ' ' + minY + ' ' + width + ' ' + height);
     clone.style.background = '#0b1220';
-
     const vp = clone.querySelector('#viewport');
     if (vp) vp.removeAttribute('transform');
-
-    // Inline styles so the PNG doesn't depend on external CSS
     const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
     style.textContent = `
       .node-rect { fill: #1e293b; stroke: #475569; stroke-width: 1.5; }
@@ -3013,8 +3015,6 @@
       .group-label-bg { fill: #0b1220; opacity: 0.85; }
     `;
     clone.insertBefore(style, clone.firstChild);
-
-    // Background rect behind content
     const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     bg.setAttribute('x', String(minX));
     bg.setAttribute('y', String(minY));
@@ -3024,45 +3024,197 @@
     const firstG = clone.querySelector('#viewport') || clone.querySelector('g');
     if (firstG) clone.insertBefore(bg, firstG);
     else clone.appendChild(bg);
+    return clone;
+  }
 
-    const serializer = new XMLSerializer();
-    const svgText = serializer.serializeToString(clone);
-    const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+  function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
 
+  async function rasterizeExportSvg(clone, width, height, scale) {
+    scale = scale || 2;
+    // Keep canvas within browser limits (avoids empty/0-byte PNG)
+    const MAX_EDGE = 8192;
+    const MAX_AREA = 4096 * 4096;
+    let tw = Math.ceil(width * scale);
+    let th = Math.ceil(height * scale);
+    if (tw > MAX_EDGE || th > MAX_EDGE || tw * th > MAX_AREA) {
+      const fit = Math.min(MAX_EDGE / width, MAX_EDGE / height, Math.sqrt(MAX_AREA / (width * height)));
+      scale = Math.max(1, fit);
+      tw = Math.ceil(width * scale);
+      th = Math.ceil(height * scale);
+    }
+    let svgText = new XMLSerializer().serializeToString(clone);
+    if (!svgText.includes('xmlns="http://www.w3.org/2000/svg"')) {
+      svgText = svgText.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    const url = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
     try {
       const img = new Image();
       await new Promise((resolve, reject) => {
         img.onload = resolve;
-        img.onerror = reject;
+        img.onerror = () => reject(new Error('SVG image failed to load'));
         img.src = url;
       });
-
-      const scale = 2; // retina-ish
       const canvas = document.createElement('canvas');
-      canvas.width = Math.ceil(width * scale);
-      canvas.height = Math.ceil(height * scale);
+      canvas.width = tw;
+      canvas.height = th;
       const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas not available');
       ctx.fillStyle = '#0b1220';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(scale, scale);
-      ctx.drawImage(img, 0, 0, width, height);
-
-      const pngUrl = canvas.toDataURL('image/png');
-      const a = document.createElement('a');
-      a.href = pngUrl;
-      a.download = (currentGraph.name || 'graph') + '.png';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    } catch (err) {
-      alert('Export failed: ' + (err && err.message ? err.message : err));
+      ctx.fillRect(0, 0, tw, th);
+      ctx.drawImage(img, 0, 0, tw, th);
+      return canvas;
     } finally {
       URL.revokeObjectURL(url);
     }
   }
 
+  function canvasToPngBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      if (canvas.toBlob) {
+        canvas.toBlob((blob) => {
+          if (blob && blob.size > 0) resolve(blob);
+          else reject(new Error('PNG encoding produced empty file'));
+        }, 'image/png');
+      } else {
+        try {
+          const dataUrl = canvas.toDataURL('image/png');
+          if (!dataUrl || dataUrl === 'data:,' || dataUrl.length < 32) {
+            reject(new Error('PNG encoding failed (empty data URL)'));
+            return;
+          }
+          const b64 = dataUrl.split(',')[1];
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          resolve(new Blob([bytes], { type: 'image/png' }));
+        } catch (e) {
+          reject(e);
+        }
+      }
+    });
+  }
 
+  /** Minimal PDF with one page embedding a PNG image (no external libs). */
+  function buildPdfFromPngBytes(pngBytes, imgW, imgH) {
+    // Page size in points (1pt = 1/72"); fit image to max 792x612 (letter landscape-ish) or keep pixels as points scaled
+    const maxW = 792, maxH = 612;
+    let pageW = imgW, pageH = imgH;
+    const fit = Math.min(maxW / imgW, maxH / imgH, 1);
+    pageW = imgW * fit;
+    pageH = imgH * fit;
+
+    function enc(s) { return new TextEncoder().encode(s); }
+    const chunks = [];
+    const offsets = [0];
+    let pos = 0;
+    function write(u8) {
+      chunks.push(u8);
+      pos += u8.length;
+    }
+    function writeStr(s) { write(enc(s)); }
+
+    writeStr('%PDF-1.4\n');
+    // object 1: catalog
+    offsets.push(pos);
+    writeStr('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+    // object 2: pages
+    offsets.push(pos);
+    writeStr('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+    // object 3: page
+    offsets.push(pos);
+    writeStr('3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' +
+      pageW.toFixed(2) + ' ' + pageH.toFixed(2) +
+      '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n');
+    // object 4: image
+    offsets.push(pos);
+    writeStr('4 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + imgW +
+      ' /Height ' + imgH + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' +
+      pngBytes.length + ' >>\nstream\n');
+    // PNG is not DCTDecode (JPEG). Use FlateDecode raw or switch to JPEG from canvas.
+    // Caller should pass JPEG bytes. Keep API name generic.
+    write(pngBytes);
+    writeStr('\nendstream\nendobj\n');
+    // object 5: content stream
+    const content = 'q\n' + pageW.toFixed(2) + ' 0 0 ' + pageH.toFixed(2) + ' 0 0 cm\n/Im0 Do\nQ\n';
+    offsets.push(pos);
+    writeStr('5 0 obj\n<< /Length ' + content.length + ' >>\nstream\n' + content + 'endstream\nendobj\n');
+    const xrefStart = pos;
+    writeStr('xref\n0 6\n');
+    writeStr('0000000000 65535 f \n');
+    for (let i = 1; i <= 5; i++) {
+      writeStr(String(offsets[i]).padStart(10, '0') + ' 00000 n \n');
+    }
+    writeStr('trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xrefStart + '\n%%EOF\n');
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    return out;
+  }
+
+  async function exportGraphSvg() {
+    if (!currentGraph) { alert('No graph loaded'); return; }
+    const bounds = graphExportBounds();
+    if (!bounds) { alert('Graph is empty'); return; }
+    try {
+      const clone = buildExportSvgClone(bounds);
+      const svgText = new XMLSerializer().serializeToString(clone);
+      const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+      downloadBlob(blob, (currentGraph.name || 'graph') + '.svg');
+    } catch (err) {
+      alert('SVG export failed: ' + (err && err.message ? err.message : err));
+    }
+  }
+
+  async function exportGraphPng() {
+    if (!currentGraph) { alert('No graph loaded'); return; }
+    const bounds = graphExportBounds();
+    if (!bounds) { alert('Graph is empty'); return; }
+    try {
+      const clone = buildExportSvgClone(bounds);
+      let canvas;
+      try {
+        canvas = await rasterizeExportSvg(clone, bounds.width, bounds.height, 4);
+      } catch (e1) {
+        // Fall back to 2x if 4x fails (memory / size limits)
+        canvas = await rasterizeExportSvg(clone, bounds.width, bounds.height, 2);
+      }
+      const blob = await canvasToPngBlob(canvas);
+      if (!blob || blob.size === 0) throw new Error('PNG is empty');
+      downloadBlob(blob, (currentGraph.name || 'graph') + '.png');
+    } catch (err) {
+      alert('Export failed: ' + (err && err.message ? err.message : err));
+    }
+  }
+
+  async function exportGraphPdf() {
+    if (!currentGraph) { alert('No graph loaded'); return; }
+    const bounds = graphExportBounds();
+    if (!bounds) { alert('Graph is empty'); return; }
+    try {
+      const clone = buildExportSvgClone(bounds);
+      const canvas = await rasterizeExportSvg(clone, bounds.width, bounds.height, 2);
+      // JPEG for /DCTDecode in minimal PDF
+      const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const b64 = jpegDataUrl.split(',')[1];
+      const bin = atob(b64);
+      const jpegBytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) jpegBytes[i] = bin.charCodeAt(i);
+      const pdfBytes = buildPdfFromPngBytes(jpegBytes, canvas.width, canvas.height);
+      downloadBlob(new Blob([pdfBytes], { type: 'application/pdf' }), (currentGraph.name || 'graph') + '.pdf');
+    } catch (err) {
+      alert('PDF export failed: ' + (err && err.message ? err.message : err));
+    }
+  }
 
   function exportReadonlyMhtml() {
     if (!currentGraph) {
@@ -4863,6 +5015,8 @@ body.props-open .props-toggle { display:none; }
   const layerOrient = document.getElementById('layerOrient');
   const layerOrientWrap = document.getElementById('layerOrientWrap');
   const btnLayerExportPng = document.getElementById('btnLayerExportPng');
+  const btnLayerExportSvg = document.getElementById('btnLayerExportSvg');
+  const btnLayerExportPdf = document.getElementById('btnLayerExportPdf');
   const btnLayerClose = document.getElementById('btnLayerClose');
 
   function shortLabel(s, n) {
@@ -5147,9 +5301,14 @@ body.props-open .props-toggle { display:none; }
     layerSvg.dataset.contentH = String(contentH);
     applyLayerViewport();
   }
-  async function exportLayerPng() {
-    if (!layerSvg || layerViewMode !== 'layers') { alert('Open a Hierarchy view first'); return; }
-    const pad = 40;
+  function layerExportFileBase() {
+    const base = (currentGraph && currentGraph.name) ? currentGraph.name : 'graph';
+    const kind = layerViewType === 'hierarchy-v' ? 'hierarchy-v' : 'hierarchy-h';
+    return base + '-' + kind;
+  }
+
+  function buildLayerExportClone() {
+    if (!layerSvg || layerViewMode !== 'layers') return null;
     const cw = parseFloat(layerSvg.dataset.contentW) || 800;
     const ch = parseFloat(layerSvg.dataset.contentH) || 600;
     const minX = 0, minY = 0;
@@ -5166,12 +5325,9 @@ body.props-open .props-toggle { display:none; }
     clone.querySelectorAll('g').forEach((g) => {
       const card = g.querySelector(':scope > rect.layer-card') || g.querySelector(':scope > .layer-card');
       if (!card) return;
-      const isFocus = card.classList.contains('focus');
       g.querySelectorAll('.layer-card-name').forEach((txt) => {
-        const color = isFocus ? '#0f172a' : '#0f172a';
-        // light cards: always dark text for readability on #e2e8f0 / focus purple
-        txt.setAttribute('fill', color);
-        txt.style.fill = color;
+        txt.setAttribute('fill', '#0f172a');
+        txt.style.fill = '#0f172a';
       });
     });
     const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
@@ -5190,28 +5346,53 @@ body.props-open .props-toggle { display:none; }
     bg.setAttribute('fill', '#0b1220');
     const first = clone.querySelector('#layerViewport') || clone.firstChild;
     if (first) clone.insertBefore(bg, first); else clone.appendChild(bg);
-    const svgText = new XMLSerializer().serializeToString(clone);
-    const url = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
+    return { clone, width, height };
+  }
+
+  async function exportLayerSvg() {
     try {
-      const img = new Image();
-      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
-      const scale = 2;
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.ceil(width * scale);
-      canvas.height = Math.ceil(height * scale);
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#0b1220';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(scale, scale);
-      ctx.drawImage(img, 0, 0, width, height);
-      const a = document.createElement('a');
-      a.href = canvas.toDataURL('image/png');
-      const base = (currentGraph && currentGraph.name) ? currentGraph.name : 'graph';
-      a.download = base + '-' + (layerViewType === 'hierarchy-v' ? 'hierarchy-v' : 'hierarchy-h') + '.png';
-      document.body.appendChild(a); a.click(); a.remove();
+      const built = buildLayerExportClone();
+      if (!built) { alert('Open a Hierarchy view first'); return; }
+      const svgText = new XMLSerializer().serializeToString(built.clone);
+      downloadBlob(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), layerExportFileBase() + '.svg');
+    } catch (err) {
+      alert('SVG export failed: ' + (err && err.message ? err.message : err));
+    }
+  }
+
+  async function exportLayerPng() {
+    try {
+      const built = buildLayerExportClone();
+      if (!built) { alert('Open a Hierarchy view first'); return; }
+      let canvas;
+      try {
+        canvas = await rasterizeExportSvg(built.clone, built.width, built.height, 4);
+      } catch (e1) {
+        canvas = await rasterizeExportSvg(built.clone, built.width, built.height, 2);
+      }
+      const blob = await canvasToPngBlob(canvas);
+      if (!blob || blob.size === 0) throw new Error('PNG is empty');
+      downloadBlob(blob, layerExportFileBase() + '.png');
     } catch (err) {
       alert('PNG export failed: ' + (err && err.message ? err.message : err));
-    } finally { URL.revokeObjectURL(url); }
+    }
+  }
+
+  async function exportLayerPdf() {
+    try {
+      const built = buildLayerExportClone();
+      if (!built) { alert('Open a Hierarchy view first'); return; }
+      const canvas = await rasterizeExportSvg(built.clone, built.width, built.height, 2);
+      const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const b64 = jpegDataUrl.split(',')[1];
+      const bin = atob(b64);
+      const jpegBytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) jpegBytes[i] = bin.charCodeAt(i);
+      const pdfBytes = buildPdfFromPngBytes(jpegBytes, canvas.width, canvas.height);
+      downloadBlob(new Blob([pdfBytes], { type: 'application/pdf' }), layerExportFileBase() + '.pdf');
+    } catch (err) {
+      alert('PDF export failed: ' + (err && err.message ? err.message : err));
+    }
   }
   function selectedNodeForLayers() {
     if (selectedType === 'node' && selectedId) return selectedId;
@@ -5230,6 +5411,8 @@ body.props-open .props-toggle { display:none; }
   if (btnGraphView) btnGraphView.addEventListener('click', () => closeLayerView());
   if (btnLayerClose) btnLayerClose.addEventListener('click', () => closeLayerView());
   if (btnLayerExportPng) btnLayerExportPng.addEventListener('click', () => exportLayerPng());
+  if (btnLayerExportSvg) btnLayerExportSvg.addEventListener('click', () => exportLayerSvg());
+  if (btnLayerExportPdf) btnLayerExportPdf.addEventListener('click', () => exportLayerPdf());
   if (layerDepth) layerDepth.addEventListener('change', () => {
     if (layerViewMode === 'layers') { renderLayerView(); fitLayerView(); }
   });

@@ -26,6 +26,8 @@
         <button id="btnExport" title="Export graph">Export ▾</button>
         <div id="exportMenu" class="export-menu hidden">
           <button type="button" id="btnExportPng" data-export="png">PNG image</button>
+          <button type="button" id="btnExportSvg" data-export="svg">SVG vector</button>
+          <button type="button" id="btnExportPdf" data-export="pdf">PDF document</button>
           <button type="button" id="btnExportMhtml" data-export="html">Interactive HTML</button>
           <button type="button" id="btnDownloadJson" data-export="json">JSON file</button>
         </div>
@@ -76,6 +78,8 @@
             </select>
           </label>
           <button type="button" id="btnLayerExportPng" title="Export as PNG">PNG</button>
+          <button type="button" id="btnLayerExportSvg" title="Export as SVG">SVG</button>
+          <button type="button" id="btnLayerExportPdf" title="Export as PDF">PDF</button>
           <button type="button" id="btnLayerClose">Close</button>
         </div>
         <svg id="layerSvg" xmlns="http://www.w3.org/2000/svg"></svg>

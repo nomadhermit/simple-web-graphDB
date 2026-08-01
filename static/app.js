@@ -3104,56 +3104,175 @@
   }
 
   /** Minimal PDF with one page embedding a PNG image (no external libs). */
-  function buildPdfFromPngBytes(pngBytes, imgW, imgH) {
-    // Page size in points (1pt = 1/72"); fit image to max 792x612 (letter landscape-ish) or keep pixels as points scaled
-    const maxW = 792, maxH = 612;
-    let pageW = imgW, pageH = imgH;
+  function pdfEscape(s) {
+    return String(s || '').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  }
+
+  function formatExportTimestamp(d) {
+    d = d || new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  /** Prompt for PDF header/footer. Defaults applied by caller. Resolves null if cancelled. */
+  function promptPdfHeaderFooter(defaultHeader, defaultFooter) {
+    return new Promise((resolve) => {
+      const modal = document.getElementById('pdfExportModal');
+      const hi = document.getElementById('pdfHeaderInput');
+      const fi = document.getElementById('pdfFooterInput');
+      const hInc = document.getElementById('pdfHeaderInclude');
+      const fInc = document.getElementById('pdfFooterInclude');
+      const hCol = document.getElementById('pdfHeaderColor');
+      const fCol = document.getElementById('pdfFooterColor');
+      const btnOk = document.getElementById('pdfExportConfirm');
+      const btnCancel = document.getElementById('pdfExportCancel');
+      if (!modal || !hi || !fi || !btnOk || !btnCancel) {
+        const h = prompt('PDF header:', defaultHeader || '');
+        if (h === null) { resolve(null); return; }
+        const f = prompt('PDF footer:', defaultFooter || formatExportTimestamp());
+        if (f === null) { resolve(null); return; }
+        resolve({
+          includeHeader: true, header: h, headerColor: '#ffffff',
+          includeFooter: true, footer: f, footerColor: '#ffffff'
+        });
+        return;
+      }
+      hi.value = defaultHeader || '';
+      fi.value = defaultFooter != null ? defaultFooter : formatExportTimestamp();
+      if (hInc) hInc.checked = true;
+      if (fInc) fInc.checked = true;
+      if (hCol) hCol.value = '#ffffff';
+      if (fCol) fCol.value = '#ffffff';
+      modal.classList.remove('hidden');
+      hi.focus();
+      hi.select();
+      const cleanup = () => {
+        modal.classList.add('hidden');
+        btnOk.removeEventListener('click', onOk);
+        btnCancel.removeEventListener('click', onCancel);
+        modal.removeEventListener('keydown', onKey);
+      };
+      const onOk = () => {
+        cleanup();
+        resolve({
+          includeHeader: hInc ? hInc.checked : true,
+          header: hi.value,
+          headerColor: (hCol && hCol.value) ? hCol.value : '#ffffff',
+          includeFooter: fInc ? fInc.checked : true,
+          footer: fi.value,
+          footerColor: (fCol && fCol.value) ? fCol.value : '#ffffff'
+        });
+      };
+      const onCancel = () => { cleanup(); resolve(null); };
+      const onKey = (e) => {
+        if (e.key === 'Escape') onCancel();
+        if (e.key === 'Enter' && e.target && e.target.tagName === 'INPUT' && e.target.type === 'text') onOk();
+      };
+      btnOk.addEventListener('click', onOk);
+      btnCancel.addEventListener('click', onCancel);
+      modal.addEventListener('keydown', onKey);
+    });
+  }
+
+  function hexToPdfRgb(hex) {
+    hex = String(hex || '#ffffff').replace('#', '');
+    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+    const n = parseInt(hex, 16);
+    if (isNaN(n)) return '1 1 1';
+    const r = ((n >> 16) & 255) / 255;
+    const g = ((n >> 8) & 255) / 255;
+    const b = (n & 255) / 255;
+    return r.toFixed(3) + ' ' + g.toFixed(3) + ' ' + b.toFixed(3);
+  }
+
+  /**
+   * Minimal single-page PDF embedding a JPEG image with optional header/footer.
+   * Header/footer bands match export background (#0b1220); text defaults white.
+   * Footer is right-aligned.
+   */
+  function buildPdfFromPngBytes(pngBytes, imgW, imgH, opts) {
+    opts = opts || {};
+    const includeHeader = !!opts.includeHeader && String(opts.header || '').length > 0;
+    const includeFooter = !!opts.includeFooter && String(opts.footer || '').length > 0;
+    const headerText = String(opts.header || '');
+    const footerText = String(opts.footer || '');
+    const headerColor = opts.headerColor || '#ffffff';
+    const footerColor = opts.footerColor || '#ffffff';
+    // Same dark background as graph/hierarchy export
+    const bandRgb = '0.043 0.071 0.125'; // #0b1220
+
+    const headerH = includeHeader ? 32 : 0;
+    const footerH = includeFooter ? 28 : 0;
+    const marginX = 36;
+
+    const maxW = 792 - marginX * 2;
+    const maxH = Math.max(200, 612 - headerH - footerH);
     const fit = Math.min(maxW / imgW, maxH / imgH, 1);
-    pageW = imgW * fit;
-    pageH = imgH * fit;
+    const drawW = imgW * fit;
+    const drawH = imgH * fit;
+    const pageW = Math.max(drawW + marginX * 2, 400);
+    const pageH = drawH + headerH + footerH;
+    const imgX = (pageW - drawW) / 2;
+    const imgY = footerH;
 
     function enc(s) { return new TextEncoder().encode(s); }
     const chunks = [];
     const offsets = [0];
     let pos = 0;
-    function write(u8) {
-      chunks.push(u8);
-      pos += u8.length;
-    }
+    function write(u8) { chunks.push(u8); pos += u8.length; }
     function writeStr(s) { write(enc(s)); }
 
-    writeStr('%PDF-1.4\n');
-    // object 1: catalog
+    writeStr('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
     offsets.push(pos);
     writeStr('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
-    // object 2: pages
     offsets.push(pos);
     writeStr('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
-    // object 3: page
     offsets.push(pos);
     writeStr('3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' +
       pageW.toFixed(2) + ' ' + pageH.toFixed(2) +
-      '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n');
-    // object 4: image
+      '] /Resources << /Font << /F1 6 0 R >> /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n');
     offsets.push(pos);
     writeStr('4 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + imgW +
       ' /Height ' + imgH + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' +
       pngBytes.length + ' >>\nstream\n');
-    // PNG is not DCTDecode (JPEG). Use FlateDecode raw or switch to JPEG from canvas.
-    // Caller should pass JPEG bytes. Keep API name generic.
     write(pngBytes);
     writeStr('\nendstream\nendobj\n');
-    // object 5: content stream
-    const content = 'q\n' + pageW.toFixed(2) + ' 0 0 ' + pageH.toFixed(2) + ' 0 0 cm\n/Im0 Do\nQ\n';
+
+    let content = '';
+    // Full page dark background (matches export)
+    content += bandRgb + ' rg\n0 0 ' + pageW.toFixed(2) + ' ' + pageH.toFixed(2) + ' re f\n';
+    if (includeHeader) {
+      const hFont = 12;
+      const hy = pageH - 20;
+      const hApproxW = headerText.length * hFont * 0.5;
+      const hx = Math.max(marginX, (pageW - hApproxW) / 2);
+      content += hexToPdfRgb(headerColor) + ' rg\n';
+      content += 'BT /F1 ' + hFont + ' Tf ' + hx.toFixed(2) + ' ' + hy.toFixed(2) + ' Td (' + pdfEscape(headerText) + ') Tj ET\n';
+    }
+    content += 'q\n' + drawW.toFixed(2) + ' 0 0 ' + drawH.toFixed(2) + ' ' +
+      imgX.toFixed(2) + ' ' + imgY.toFixed(2) + ' cm\n/Im0 Do\nQ\n';
+    if (includeFooter) {
+      // Right-aligned: approximate width ~0.5 * fontSize * charCount for Helvetica
+      const fontSize = 9;
+      const approxW = footerText.length * fontSize * 0.5;
+      const fx = Math.max(marginX, pageW - marginX - approxW);
+      const fy = 10;
+      content += hexToPdfRgb(footerColor) + ' rg\n';
+      content += 'BT /F1 ' + fontSize + ' Tf ' + fx.toFixed(2) + ' ' + fy.toFixed(2) + ' Td (' + pdfEscape(footerText) + ') Tj ET\n';
+    }
     offsets.push(pos);
     writeStr('5 0 obj\n<< /Length ' + content.length + ' >>\nstream\n' + content + 'endstream\nendobj\n');
+    offsets.push(pos);
+    writeStr('6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n');
+
     const xrefStart = pos;
-    writeStr('xref\n0 6\n');
+    writeStr('xref\n0 7\n');
     writeStr('0000000000 65535 f \n');
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 6; i++) {
       writeStr(String(offsets[i]).padStart(10, '0') + ' 00000 n \n');
     }
-    writeStr('trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xrefStart + '\n%%EOF\n');
+    writeStr('trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n' + xrefStart + '\n%%EOF\n');
     const total = chunks.reduce((n, c) => n + c.length, 0);
     const out = new Uint8Array(total);
     let o = 0;
@@ -3161,6 +3280,10 @@
     return out;
   }
 
+  /**
+   * Minimal single-page PDF embedding a JPEG image with optional header/footer (Helvetica).
+   * pngBytes param is JPEG bytes (DCTDecode).
+   */
   async function exportGraphSvg() {
     if (!currentGraph) { alert('No graph loaded'); return; }
     const bounds = graphExportBounds();
@@ -3200,16 +3323,19 @@
     if (!currentGraph) { alert('No graph loaded'); return; }
     const bounds = graphExportBounds();
     if (!bounds) { alert('Graph is empty'); return; }
+    const defaultHeader = (currentGraph.name || 'graph');
+    const defaultFooter = formatExportTimestamp();
+    const opts = await promptPdfHeaderFooter(defaultHeader, defaultFooter);
+    if (!opts) return;
     try {
       const clone = buildExportSvgClone(bounds);
       const canvas = await rasterizeExportSvg(clone, bounds.width, bounds.height, 2);
-      // JPEG for /DCTDecode in minimal PDF
       const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
       const b64 = jpegDataUrl.split(',')[1];
       const bin = atob(b64);
       const jpegBytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) jpegBytes[i] = bin.charCodeAt(i);
-      const pdfBytes = buildPdfFromPngBytes(jpegBytes, canvas.width, canvas.height);
+      const pdfBytes = buildPdfFromPngBytes(jpegBytes, canvas.width, canvas.height, opts);
       downloadBlob(new Blob([pdfBytes], { type: 'application/pdf' }), (currentGraph.name || 'graph') + '.pdf');
     } catch (err) {
       alert('PDF export failed: ' + (err && err.message ? err.message : err));
@@ -5382,13 +5508,18 @@ body.props-open .props-toggle { display:none; }
     try {
       const built = buildLayerExportClone();
       if (!built) { alert('Open a Hierarchy view first'); return; }
+      const focusNode = currentGraph && layerFocusId && currentGraph.nodes[layerFocusId];
+      const defaultHeader = (focusNode && focusNode.label) ? focusNode.label : (layerFocusId || 'Hierarchy');
+      const defaultFooter = formatExportTimestamp();
+      const opts = await promptPdfHeaderFooter(defaultHeader, defaultFooter);
+      if (!opts) return;
       const canvas = await rasterizeExportSvg(built.clone, built.width, built.height, 2);
       const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
       const b64 = jpegDataUrl.split(',')[1];
       const bin = atob(b64);
       const jpegBytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) jpegBytes[i] = bin.charCodeAt(i);
-      const pdfBytes = buildPdfFromPngBytes(jpegBytes, canvas.width, canvas.height);
+      const pdfBytes = buildPdfFromPngBytes(jpegBytes, canvas.width, canvas.height, opts);
       downloadBlob(new Blob([pdfBytes], { type: 'application/pdf' }), layerExportFileBase() + '.pdf');
     } catch (err) {
       alert('PDF export failed: ' + (err && err.message ? err.message : err));

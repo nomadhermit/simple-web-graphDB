@@ -8,6 +8,8 @@ A lightweight local graph database with a visual ERD-inspired UI, written in pur
 
 **Architecture:** see [architecture.md](architecture.md) for a flow diagram of the application layers, API, data model, and request paths.
 
+![User Interface](./ui.jpg)
+
 ## Features
 
 - Local web server on `http://localhost:8080` (configurable)
